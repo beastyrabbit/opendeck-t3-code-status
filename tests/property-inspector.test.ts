@@ -136,9 +136,9 @@ test("the property inspector reports malformed or invalid action data", () => {
 	}
 });
 
-test("the refresh interval starts disabled and is enabled only after valid action data", () => {
+test("the refresh interval stays disabled until the OpenDeck socket is ready", () => {
 	assert.match(inspectorHtml, /id="refresh-seconds"[\s\S]*?disabled[\s\S]*?aria-label=/);
-	const { connect, elements } = loadInspector();
+	const { connect, elements, socket } = loadInspector();
 	connect(
 		1234,
 		"pi-context",
@@ -146,8 +146,12 @@ test("the refresh interval starts disabled and is enabled only after valid actio
 		"{}",
 		JSON.stringify({ context: "action-context", payload: { settings: { refreshSeconds: 90 } } }),
 	);
-	assert.equal(elements.get("refresh-seconds")?.disabled, false);
+	assert.equal(elements.get("refresh-seconds")?.disabled, true);
 	assert.equal(elements.get("refresh-seconds")?.value, "90");
+	const connection = socket();
+	assert.ok(connection);
+	connection.open();
+	assert.equal(elements.get("refresh-seconds")?.disabled, false);
 });
 
 test("connection updates use one atomic live region for status, detail, and recovery guidance", () => {

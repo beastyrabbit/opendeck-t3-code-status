@@ -1,6 +1,7 @@
-import { open, opendir } from "node:fs/promises";
+import { type BigIntStats, constants as fileConstants } from "node:fs";
+import { type FileHandle, lstat, open, opendir } from "node:fs/promises";
 import { endianness, homedir } from "node:os";
-import { isAbsolute, resolve } from "node:path";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { TextDecoder } from "node:util";
 
 // snappyjs intentionally has no bundled TypeScript declarations.
@@ -12,6 +13,7 @@ import type { T3ShellSnapshot } from "./types.js";
 const DATABASE_ID = 1;
 const SHELL_STORE_ID = 2;
 const OBJECT_STORE_DATA_INDEX_ID = 1;
+const BLOB_ENTRY_INDEX_ID = 3;
 const LEVELDB_TABLE_FOOTER_BYTES = 48;
 const LEVELDB_TABLE_MAGIC = Buffer.from("57fb808b247547db", "hex");
 const LEVELDB_LOG_BLOCK_BYTES = 32 * 1024;
@@ -44,6 +46,19 @@ const V8_UTF8_STRING_TAG = 0x53;
 const V8_ONE_BYTE_STRING_TAG = 0x22;
 const V8_TWO_BYTE_STRING_TAG = 0x63;
 const SUPPORTED_V8_SERIALIZATION_VERSION = 15;
+const EXTERNAL_VALUE_MARKER = Buffer.from([0xff, 0x11, 0x01]);
+const COMPRESSED_VALUE_MARKER = Buffer.from([0xff, 0x11, 0x02]);
+const EXTERNAL_OBJECT_BLOB = 0;
+const EXTERNAL_OBJECT_FILE = 1;
+const EXTERNAL_OBJECT_FILE_SYSTEM_ACCESS_HANDLE = 2;
+const MINIMUM_BLOB_NUMBER = 2n;
+const MAX_SIGNED_INT64 = 0x7fff_ffff_ffff_ffffn;
+const WRAPPER_BLOB_MIME_TYPE = "application/vnd.blink-idb-value-wrapper";
+const INDEXED_DB_LEVELDB_SUFFIX = ".indexeddb.leveldb";
+const READ_ONLY_FILE_FLAGS =
+	process.platform === "win32"
+		? fileConstants.O_RDONLY
+		: fileConstants.O_RDONLY | fileConstants.O_NONBLOCK | fileConstants.O_NOFOLLOW;
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 const CRC32C_TABLE = new Uint32Array(256);
@@ -117,6 +132,30 @@ interface StoredShellValue {
 	environmentId: string;
 	schemaVersion: 1;
 	snapshot: T3ShellSnapshot;
+}
+
+interface ExternalShellValue {
+	blobIndex: number;
+	blobSize: number;
+}
+
+interface ExternalWrapperBlob {
+	blobNumber: number;
+	size: number;
+}
+
+interface LatestShellData {
+	keyIdentity: string;
+	record: LevelDbRecord;
+}
+
+interface LatestShellRecords {
+	blobEntries: Map<string, LevelDbRecord>;
+	data: Map<string, LatestShellData>;
+}
+
+interface ReadInputBudget {
+	remainingBytes: number;
 }
 
 interface RawTableBlockEntry {
@@ -317,14 +356,34 @@ export function parseIndexedDbKeyPrefix(key: Uint8Array): IndexedDbKeyPrefix {
 	return { bytesRead: offset, databaseId, indexId, objectStoreId };
 }
 
-function isShellObjectStoreKey(key: Uint8Array): boolean {
+type ShellRecordKind = "blob-entry" | "data";
+
+function shellRecordKind(key: Uint8Array): ShellRecordKind | undefined {
 	const prefix = parseIndexedDbKeyPrefix(key);
-	const isShellStore =
-		prefix.databaseId === DATABASE_ID &&
-		prefix.objectStoreId === SHELL_STORE_ID &&
-		prefix.indexId === OBJECT_STORE_DATA_INDEX_ID;
-	if (isShellStore && key.length > MAX_INDEXED_DB_SHELL_KEY_BYTES) return fail("unsupported");
-	return isShellStore;
+	if (prefix.databaseId !== DATABASE_ID || prefix.objectStoreId !== SHELL_STORE_ID) return undefined;
+	if (prefix.indexId === OBJECT_STORE_DATA_INDEX_ID) return "data";
+	if (prefix.indexId === BLOB_ENTRY_INDEX_ID) return "blob-entry";
+	return undefined;
+}
+
+function isShellObjectStoreKey(key: Uint8Array): boolean {
+	const isShellData = shellRecordKind(key) === "data";
+	if (isShellData && key.length > MAX_INDEXED_DB_SHELL_KEY_BYTES) return fail("unsupported");
+	return isShellData;
+}
+
+function isShellCacheKey(key: Uint8Array): boolean {
+	const isShellRecord = shellRecordKind(key) !== undefined;
+	if (isShellRecord && key.length > MAX_INDEXED_DB_SHELL_KEY_BYTES) return fail("unsupported");
+	return isShellRecord;
+}
+
+function shellUserKeyIdentity(key: Buffer, budget: T3CacheAllocationBudget): string {
+	const prefix = parseIndexedDbKeyPrefix(key);
+	const suffix = key.subarray(prefix.bytesRead);
+	// Hex contains two JavaScript code units per source byte.
+	reserveAllocation(budget, suffix.length * 4);
+	return suffix.toString("hex");
 }
 
 export function decodeIndexedDbStringKey(
@@ -673,9 +732,139 @@ function decodeV8Uint32Varint(buffer: Uint8Array, offset: number): DecodedVarint
 	return fail("corrupt");
 }
 
+function decodeCanonicalUint64Varint(
+	buffer: Uint8Array,
+	offset: number,
+): { bytesRead: number; value: bigint } {
+	let value = 0n;
+	for (let index = 0; index < 10; index += 1) {
+		const byte = buffer[offset + index];
+		if (byte === undefined) return fail("corrupt");
+		const payload = byte & 0x7f;
+		if (index === 9 && payload > 1) return fail("corrupt");
+		value |= BigInt(payload) << BigInt(index * 7);
+		if ((byte & 0x80) === 0) {
+			if (index > 0 && payload === 0) return fail("corrupt");
+			if (value > MAX_SIGNED_INT64) return fail("corrupt");
+			return { bytesRead: index + 1, value };
+		}
+	}
+	return fail("corrupt");
+}
+
+function metadataString(
+	buffer: Uint8Array,
+	offset: number,
+): { bytesRead: number; isWrapperMimeType: boolean } {
+	const length = decodeCanonicalUint64Varint(buffer, offset);
+	const contentsOffset = offset + length.bytesRead;
+	const remainingCodeUnits = Math.floor((buffer.length - contentsOffset) / 2);
+	if (length.value > BigInt(remainingCodeUnits)) return fail("corrupt");
+	const codeUnits = Number(length.value);
+	let isWrapperMimeType = codeUnits === WRAPPER_BLOB_MIME_TYPE.length;
+	if (isWrapperMimeType) {
+		for (let index = 0; index < WRAPPER_BLOB_MIME_TYPE.length; index += 1) {
+			const encodedCodeUnit =
+				(buffer[contentsOffset + index * 2] ?? 0) * 256 + (buffer[contentsOffset + index * 2 + 1] ?? 0);
+			if (encodedCodeUnit !== WRAPPER_BLOB_MIME_TYPE.charCodeAt(index)) {
+				isWrapperMimeType = false;
+				break;
+			}
+		}
+	}
+	return { bytesRead: length.bytesRead + codeUnits * 2, isWrapperMimeType };
+}
+
+function skipMetadataBytes(buffer: Uint8Array, offset: number): number {
+	const length = decodeCanonicalUint64Varint(buffer, offset);
+	const contentsOffset = offset + length.bytesRead;
+	if (length.value > BigInt(buffer.length - contentsOffset)) return fail("corrupt");
+	return length.bytesRead + Number(length.value);
+}
+
+function parseExternalWrapperBlob(
+	metadata: Uint8Array,
+	targetBlobIndex: number,
+	budget: T3CacheAllocationBudget,
+): ExternalWrapperBlob {
+	let offset = 0;
+	let blobIndex = 0;
+	let wrapperMimeTypeCount = 0;
+	let wrapper: { blobNumber: bigint; size: bigint } | undefined;
+	while (offset < metadata.length) {
+		consumeEntry(budget);
+		const objectType = metadata[offset];
+		offset += 1;
+		if (objectType === EXTERNAL_OBJECT_BLOB || objectType === EXTERNAL_OBJECT_FILE) {
+			const blobNumber = decodeCanonicalUint64Varint(metadata, offset);
+			offset += blobNumber.bytesRead;
+			if (blobNumber.value < MINIMUM_BLOB_NUMBER) return fail("corrupt");
+			const mimeType = metadataString(metadata, offset);
+			offset += mimeType.bytesRead;
+			const size = decodeCanonicalUint64Varint(metadata, offset);
+			offset += size.bytesRead;
+			if (objectType === EXTERNAL_OBJECT_BLOB && mimeType.isWrapperMimeType) {
+				wrapperMimeTypeCount += 1;
+			}
+
+			if (blobIndex === targetBlobIndex) {
+				if (objectType !== EXTERNAL_OBJECT_BLOB || !mimeType.isWrapperMimeType) {
+					return fail("corrupt");
+				}
+				wrapper = { blobNumber: blobNumber.value, size: size.value };
+			} else if (wrapper !== undefined) {
+				// Chromium appends the wrapper as the last Blob/File external object.
+				return fail("corrupt");
+			}
+			blobIndex += 1;
+
+			if (objectType === EXTERNAL_OBJECT_FILE) {
+				const filename = metadataString(metadata, offset);
+				offset += filename.bytesRead;
+				const lastModified = decodeCanonicalUint64Varint(metadata, offset);
+				offset += lastModified.bytesRead;
+			}
+		} else if (objectType === EXTERNAL_OBJECT_FILE_SYSTEM_ACCESS_HANDLE) {
+			offset += skipMetadataBytes(metadata, offset);
+		} else {
+			return fail("corrupt");
+		}
+	}
+	if (wrapper === undefined || wrapperMimeTypeCount !== 1) return fail("corrupt");
+	if (wrapper.size > BigInt(MAX_STORED_SHELL_PAYLOAD_BYTES)) return fail("unsupported");
+	if (wrapper.blobNumber > BigInt(Number.MAX_SAFE_INTEGER)) return fail("unsupported");
+	return { blobNumber: Number(wrapper.blobNumber), size: Number(wrapper.size) };
+}
+
+function objectStoreWireData(rawValue: Uint8Array, budget: T3CacheAllocationBudget): Buffer<ArrayBufferLike> {
+	const idbVersion = decodeLevelDbVarint(rawValue, 0);
+	if (!Buffer.isBuffer(rawValue)) reserveAllocation(budget, rawValue.byteLength);
+	const buffer = Buffer.isBuffer(rawValue) ? rawValue : Buffer.from(rawValue);
+	return buffer.subarray(idbVersion.bytesRead);
+}
+
+function externalShellValue(
+	rawValue: Uint8Array,
+	budget: T3CacheAllocationBudget,
+): ExternalShellValue | undefined {
+	const wireData = objectStoreWireData(rawValue, budget);
+	if (!wireData.subarray(0, EXTERNAL_VALUE_MARKER.length).equals(EXTERNAL_VALUE_MARKER)) {
+		return undefined;
+	}
+	let offset = EXTERNAL_VALUE_MARKER.length;
+	const blobSize = decodeV8Uint32Varint(wireData, offset);
+	offset += blobSize.bytesRead;
+	const blobIndex = decodeV8Uint32Varint(wireData, offset);
+	offset += blobIndex.bytesRead;
+	if (offset !== wireData.length) return fail("corrupt");
+	if (blobSize.value > MAX_STORED_SHELL_PAYLOAD_BYTES) return fail("unsupported");
+	return { blobIndex: blobIndex.value, blobSize: blobSize.value };
+}
+
 function decodePrimitiveV8String(
 	serialized: Buffer<ArrayBufferLike>,
 	budget: T3CacheAllocationBudget,
+	globalOffset = 0,
 ): string {
 	if (serialized[0] !== V8_VERSION_TAG) return fail("corrupt");
 	const version = decodeV8Uint32Varint(serialized, 1);
@@ -696,7 +885,9 @@ function decodePrimitiveV8String(
 	offset += length.bytesRead;
 	if (length.value > MAX_STORED_SHELL_PAYLOAD_BYTES) return fail("unsupported");
 	if (tag === V8_TWO_BYTE_STRING_TAG && length.value % 2 !== 0) return fail("corrupt");
-	if (tag === V8_TWO_BYTE_STRING_TAG ? offset % 2 !== 0 : hasPadding) return fail("corrupt");
+	if (tag === V8_TWO_BYTE_STRING_TAG ? (globalOffset + offset) % 2 !== 0 : hasPadding) {
+		return fail("corrupt");
+	}
 	if (offset + length.value !== serialized.length) return fail("corrupt");
 
 	// A decoded JavaScript string can occupy two bytes per serialized byte.
@@ -715,13 +906,15 @@ function decodePrimitiveV8String(
 	}
 }
 
-function unwrapBlinkValue(rawValue: Uint8Array, budget: T3CacheAllocationBudget): string {
-	const idbVersion = decodeLevelDbVarint(rawValue, 0);
-	if (!Buffer.isBuffer(rawValue)) reserveAllocation(budget, rawValue.byteLength);
-	const buffer = Buffer.isBuffer(rawValue) ? rawValue : Buffer.from(rawValue);
-	let payload: Buffer<ArrayBufferLike> = buffer.subarray(idbVersion.bytesRead);
-	if (payload[0] === 0xff && payload[1] === 0x11 && payload[2] === 0x02) {
-		payload = decompressSnappy(payload.subarray(3), budget, MAX_STORED_SHELL_PAYLOAD_BYTES);
+function unwrapBlinkWireData(wireData: Uint8Array, budget: T3CacheAllocationBudget): string {
+	if (!Buffer.isBuffer(wireData)) reserveAllocation(budget, wireData.byteLength);
+	let payload: Buffer<ArrayBufferLike> = Buffer.isBuffer(wireData) ? wireData : Buffer.from(wireData);
+	if (payload.subarray(0, COMPRESSED_VALUE_MARKER.length).equals(COMPRESSED_VALUE_MARKER)) {
+		payload = decompressSnappy(
+			payload.subarray(COMPRESSED_VALUE_MARKER.length),
+			budget,
+			MAX_STORED_SHELL_PAYLOAD_BYTES,
+		);
 	}
 	let start = 0;
 	let end = payload.length;
@@ -748,7 +941,7 @@ function unwrapBlinkValue(rawValue: Uint8Array, budget: T3CacheAllocationBudget)
 	}
 	const serializedBytes = end - start;
 	if (serializedBytes > MAX_STORED_SHELL_PAYLOAD_BYTES) return fail("unsupported");
-	return decodePrimitiveV8String(payload.subarray(start, end), budget);
+	return decodePrimitiveV8String(payload.subarray(start, end), budget, start);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -840,7 +1033,11 @@ export function decodeStoredShellValue(
 	rawValue: Uint8Array,
 	budget: T3CacheAllocationBudget = createT3CacheAllocationBudget(),
 ): StoredShellValue {
-	const decoded = unwrapBlinkValue(rawValue, budget);
+	return decodeStoredShellWireData(objectStoreWireData(rawValue, budget), budget);
+}
+
+function decodeStoredShellWireData(wireData: Uint8Array, budget: T3CacheAllocationBudget): StoredShellValue {
+	const decoded = unwrapBlinkWireData(wireData, budget);
 	const decodedBytes = Buffer.byteLength(decoded);
 	if (decodedBytes > MAX_SHELL_JSON_BYTES) return fail("unsupported");
 	reserveAllocation(budget, decodedBytes * JSON_PARSE_ALLOCATION_MULTIPLIER);
@@ -867,30 +1064,83 @@ export function decodeStoredShellValue(
 	};
 }
 
+function decodeExternalStoredShellWireData(
+	wireData: Uint8Array,
+	budget: T3CacheAllocationBudget,
+): StoredShellValue {
+	try {
+		return decodeStoredShellWireData(wireData, budget);
+	} catch (cause) {
+		if (cause instanceof T3CacheError && cause.code === "inconsistent") return fail("corrupt", cause);
+		throw cause;
+	}
+}
+
+function latestShellDataRecords(
+	records: readonly LevelDbRecord[],
+	budget: T3CacheAllocationBudget,
+): Map<string, LevelDbRecord> {
+	const latest = new Map<string, LevelDbRecord>();
+	for (const record of records) {
+		// This guard is deliberately before decodeStoredShellValue. Values from
+		// catalog/keys, blob metadata, thread, server-config, and vcs-refs are never interpreted.
+		if (!isShellObjectStoreKey(record.key)) continue;
+		const environmentId = decodeIndexedDbStringKey(record.key, budget);
+		const previous = latest.get(environmentId);
+		if (previous === undefined || record.sequence > previous.sequence) {
+			latest.set(environmentId, record);
+		}
+	}
+	return latest;
+}
+
+function latestShellRecords(
+	records: readonly LevelDbRecord[],
+	budget: T3CacheAllocationBudget,
+): LatestShellRecords {
+	const latest: LatestShellRecords = { blobEntries: new Map(), data: new Map() };
+	for (const [environmentId, record] of latestShellDataRecords(records, budget)) {
+		latest.data.set(environmentId, {
+			keyIdentity: shellUserKeyIdentity(record.key, budget),
+			record,
+		});
+	}
+	for (const record of records) {
+		if (shellRecordKind(record.key) !== "blob-entry") continue;
+		const keyIdentity = shellUserKeyIdentity(record.key, budget);
+		const previous = latest.blobEntries.get(keyIdentity);
+		if (previous === undefined || record.sequence > previous.sequence) {
+			latest.blobEntries.set(keyIdentity, record);
+		}
+	}
+	return latest;
+}
+
+function appendDecodedShell(
+	shells: CachedT3Shell[],
+	expectedEnvironmentId: string,
+	stored: StoredShellValue,
+): void {
+	if (stored.environmentId !== expectedEnvironmentId) fail("corrupt");
+	shells.push({ environmentId: stored.environmentId, snapshot: stored.snapshot });
+}
+
+function sortShells(shells: CachedT3Shell[]): CachedT3Shell[] {
+	return shells.sort((left, right) => left.environmentId.localeCompare(right.environmentId));
+}
+
 export function collectCachedT3Shells(
 	records: readonly LevelDbRecord[],
 	budget: T3CacheAllocationBudget = createT3CacheAllocationBudget(),
 ): CachedT3Shell[] {
-	const latestByEnvironment = new Map<string, LevelDbRecord>();
-	for (const record of records) {
-		// This guard is deliberately before decodeStoredShellValue. Values from
-		// catalog/keys, thread, server-config, and vcs-refs are never interpreted.
-		if (!isShellObjectStoreKey(record.key)) continue;
-		const environmentId = decodeIndexedDbStringKey(record.key, budget);
-		const previous = latestByEnvironment.get(environmentId);
-		if (previous === undefined || record.sequence > previous.sequence) {
-			latestByEnvironment.set(environmentId, record);
-		}
-	}
-
+	const latestByEnvironment = latestShellDataRecords(records, budget);
 	const shells: CachedT3Shell[] = [];
 	for (const [expectedEnvironmentId, record] of latestByEnvironment) {
 		if (record.recordType === 0) continue;
 		const stored = decodeStoredShellValue(record.value, budget);
-		if (stored.environmentId !== expectedEnvironmentId) return fail("corrupt");
-		shells.push({ environmentId: stored.environmentId, snapshot: stored.snapshot });
+		appendDecodedShell(shells, expectedEnvironmentId, stored);
 	}
-	return shells.sort((left, right) => left.environmentId.localeCompare(right.environmentId));
+	return sortShells(shells);
 }
 
 function isDatabaseFilename(name: string): boolean {
@@ -968,29 +1218,111 @@ async function readOnce(
 ): Promise<CachedT3Shell[]> {
 	const before = await databaseFilenames(directory);
 	const records: LevelDbRecord[] = [];
-	let totalBytes = 0;
+	const inputBudget: ReadInputBudget = { remainingBytes: MAX_DATABASE_TOTAL_BYTES };
 	try {
 		for (const name of before) {
-			const contents = await readBoundedFile(
-				resolve(directory, name),
-				MAX_DATABASE_TOTAL_BYTES - totalBytes,
-				budget,
-			);
-			totalBytes += contents.length;
+			const contents = await readBoundedFile(resolve(directory, name), inputBudget.remainingBytes, budget);
+			inputBudget.remainingBytes -= contents.length;
 			appendRecords(
 				records,
 				name.endsWith(".log")
-					? parseLevelDbLog(contents, isShellObjectStoreKey, budget)
-					: parseLevelDbTable(contents, isShellObjectStoreKey, budget),
+					? parseLevelDbLog(contents, isShellCacheKey, budget)
+					: parseLevelDbTable(contents, isShellCacheKey, budget),
 			);
 		}
+		const shells = await collectCachedT3ShellsWithBlobs(records, directory, inputBudget, budget);
+		const after = await databaseFilenames(directory);
+		if (!sameNames(before, after)) return fail("inconsistent");
+		return shells;
 	} catch (cause) {
 		if (isNodeError(cause) && cause.code === "ENOENT") return fail("inconsistent", cause);
 		throw cause;
 	}
-	const after = await databaseFilenames(directory);
-	if (!sameNames(before, after)) return fail("inconsistent");
-	return collectCachedT3Shells(records, budget);
+}
+
+function externalBlobPath(directory: string, blobNumber: number): string {
+	const databaseName = basename(directory);
+	if (!databaseName.endsWith(INDEXED_DB_LEVELDB_SUFFIX)) return fail("unsupported");
+	const blobDirectory = resolve(
+		dirname(directory),
+		`${databaseName.slice(0, -INDEXED_DB_LEVELDB_SUFFIX.length)}.indexeddb.blob`,
+	);
+	const highByte = Number((BigInt(blobNumber) & 0xff00n) >> 8n);
+	return resolve(
+		blobDirectory,
+		DATABASE_ID.toString(16),
+		highByte.toString(16).padStart(2, "0"),
+		blobNumber.toString(16),
+	);
+}
+
+async function readExternalBlob(
+	path: string,
+	expectedSize: number,
+	inputBudget: ReadInputBudget,
+	budget: T3CacheAllocationBudget,
+): Promise<Buffer> {
+	if (expectedSize > MAX_STORED_SHELL_PAYLOAD_BYTES || expectedSize > inputBudget.remainingBytes) {
+		return fail("unsupported");
+	}
+	const { handle, metadata } = await openStableRegularFile(path);
+	try {
+		if (metadata.size !== BigInt(expectedSize)) return fail("inconsistent");
+		reserveAllocation(budget, expectedSize);
+		const contents = Buffer.allocUnsafe(expectedSize);
+		let offset = 0;
+		while (offset < expectedSize) {
+			const { bytesRead } = await handle.read(contents, offset, expectedSize - offset, offset);
+			if (bytesRead === 0) return fail("inconsistent");
+			offset += bytesRead;
+		}
+		const extraByte = Buffer.allocUnsafe(1);
+		if ((await handle.read(extraByte, 0, 1, expectedSize)).bytesRead !== 0) {
+			return fail("inconsistent");
+		}
+		await assertFileUnchanged(handle, metadata);
+		inputBudget.remainingBytes -= expectedSize;
+		return contents;
+	} finally {
+		await handle.close();
+	}
+}
+
+async function collectCachedT3ShellsWithBlobs(
+	records: readonly LevelDbRecord[],
+	directory: string,
+	inputBudget: ReadInputBudget,
+	budget: T3CacheAllocationBudget,
+): Promise<CachedT3Shell[]> {
+	const latest = latestShellRecords(records, budget);
+	const shells: CachedT3Shell[] = [];
+	for (const [expectedEnvironmentId, { keyIdentity, record }] of latest.data) {
+		if (record.recordType === 0) continue;
+		const external = externalShellValue(record.value, budget);
+		if (external === undefined) {
+			appendDecodedShell(shells, expectedEnvironmentId, decodeStoredShellValue(record.value, budget));
+			continue;
+		}
+
+		const metadataRecord = latest.blobEntries.get(keyIdentity);
+		if (
+			metadataRecord === undefined ||
+			metadataRecord.recordType === 0 ||
+			metadataRecord.sequence <= record.sequence
+		) {
+			return fail("inconsistent");
+		}
+		const wrapperBlob = parseExternalWrapperBlob(metadataRecord.value, external.blobIndex, budget);
+		if (wrapperBlob.size !== external.blobSize) return fail("corrupt");
+		const wireData = await readExternalBlob(
+			externalBlobPath(directory, wrapperBlob.blobNumber),
+			wrapperBlob.size,
+			inputBudget,
+			budget,
+		);
+		appendDecodedShell(shells, expectedEnvironmentId, decodeExternalStoredShellWireData(wireData, budget));
+	}
+	return sortShells(shells);
 }
 
 async function readBoundedFile(
@@ -998,10 +1330,8 @@ async function readBoundedFile(
 	remainingBytes: number,
 	budget: T3CacheAllocationBudget,
 ): Promise<Buffer> {
-	const handle = await open(path, "r");
+	const { handle, metadata } = await openStableRegularFile(path);
 	try {
-		const metadata = await handle.stat({ bigint: true });
-		if (!metadata.isFile()) return fail("unsupported");
 		const permittedBytes = BigInt(Math.max(0, Math.min(MAX_DATABASE_FILE_BYTES, remainingBytes)));
 		if (metadata.size > permittedBytes) return fail("unsupported");
 		const size = Number(metadata.size);
@@ -1015,10 +1345,56 @@ async function readBoundedFile(
 		}
 		const extraByte = Buffer.allocUnsafe(1);
 		if ((await handle.read(extraByte, 0, 1, size)).bytesRead !== 0) return fail("inconsistent");
+		await assertFileUnchanged(handle, metadata);
 		return contents;
 	} finally {
 		await handle.close();
 	}
+}
+
+async function openStableRegularFile(path: string): Promise<{ handle: FileHandle; metadata: BigIntStats }> {
+	const before = await lstat(path, { bigint: true });
+	if (!before.isFile()) return fail("unsupported");
+	let handle: FileHandle;
+	try {
+		handle = await open(path, READ_ONLY_FILE_FLAGS);
+	} catch (cause) {
+		if (isNodeError(cause) && (cause.code === "ENOENT" || cause.code === "ELOOP")) {
+			return fail("inconsistent", cause);
+		}
+		throw cause;
+	}
+	try {
+		const opened = await handle.stat({ bigint: true });
+		if (!opened.isFile() || !sameFileIdentity(before, opened)) return fail("inconsistent");
+		return { handle, metadata: opened };
+	} catch (cause) {
+		await handle.close();
+		throw cause;
+	}
+}
+
+async function assertFileUnchanged(handle: FileHandle, before: BigIntStats): Promise<void> {
+	const after = await handle.stat({ bigint: true });
+	if (
+		!after.isFile() ||
+		!sameFileIdentity(before, after) ||
+		after.size !== before.size ||
+		after.mtimeNs !== before.mtimeNs ||
+		after.ctimeNs !== before.ctimeNs
+	) {
+		return fail("inconsistent");
+	}
+}
+
+export function sameFileIdentity(
+	left: Pick<BigIntStats, "dev" | "ino">,
+	right: Pick<BigIntStats, "dev" | "ino">,
+	platform: NodeJS.Platform = process.platform,
+): boolean {
+	if (left.ino !== right.ino) return false;
+	if (platform === "win32") return left.ino !== 0n;
+	return left.dev === right.dev;
 }
 
 async function readDirectoryWithRetries(

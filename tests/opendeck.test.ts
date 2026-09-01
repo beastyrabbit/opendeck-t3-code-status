@@ -4,9 +4,11 @@ import { describe, test } from "node:test";
 import {
 	canQueueWebSocketMessage,
 	isValidOpenDeckContext,
+	isValidOpenDeckTitle,
 	MAX_OPENDECK_CONTEXT_CODE_UNITS,
 	MAX_OPENDECK_LIVE_CONTEXTS,
 	MAX_OPENDECK_PENDING_HANDLERS,
+	MAX_OPENDECK_TITLE_CODE_UNITS,
 	OpenDeckHost,
 	parseLaunchArguments,
 } from "../src/opendeck.js";
@@ -63,6 +65,14 @@ test("OpenDeck context validation accepts the boundary and rejects hostile ident
 	assert.equal(isValidOpenDeckContext(42), false);
 });
 
+test("OpenDeck title validation accepts the boundary and rejects hostile values", () => {
+	assert.equal(isValidOpenDeckTitle("4 of 6 working, 2 waiting"), true);
+	assert.equal(isValidOpenDeckTitle("x".repeat(MAX_OPENDECK_TITLE_CODE_UNITS)), true);
+	assert.equal(isValidOpenDeckTitle(""), false);
+	assert.equal(isValidOpenDeckTitle("x".repeat(MAX_OPENDECK_TITLE_CODE_UNITS + 1)), false);
+	assert.equal(isValidOpenDeckTitle(42), false);
+});
+
 test("the host bounds retained images and accepts a replacement after cleanup", () => {
 	const host = new OpenDeckHost(launchArguments);
 	const internals = host as unknown as { desiredImages: Map<string, string> };
@@ -79,6 +89,50 @@ test("the host bounds retained images and accepts a replacement after cleanup", 
 	host.setImage("replacement-context", "replacement");
 	assert.equal(internals.desiredImages.size, MAX_OPENDECK_LIVE_CONTEXTS);
 	assert.equal(internals.desiredImages.get("replacement-context"), "replacement");
+});
+
+test("the host sends, deduplicates, restores, and forgets accessible titles", () => {
+	const host = new OpenDeckHost(launchArguments);
+	const messages: string[] = [];
+	const internals = host as unknown as {
+		flushStates(): void;
+		sentTitles: Map<string, string>;
+		socket: { bufferedAmount: number; readyState: number; send(message: string): void };
+	};
+	internals.socket = {
+		bufferedAmount: 0,
+		readyState: 1,
+		send: (message) => messages.push(message),
+	};
+
+	host.setTitle("context-a", "4 of 6 working, 2 waiting");
+	host.setTitle("context-a", "4 of 6 working, 2 waiting");
+	assert.equal(messages.length, 1);
+	assert.deepEqual(JSON.parse(messages[0] ?? "null"), {
+		context: "context-a",
+		event: "setTitle",
+		payload: { target: 0, title: "4 of 6 working, 2 waiting" },
+	});
+
+	internals.sentTitles.clear();
+	internals.flushStates();
+	assert.equal(messages.length, 2);
+	host.forgetContext("context-a");
+	internals.sentTitles.clear();
+	internals.flushStates();
+	assert.equal(messages.length, 2);
+});
+
+test("the host bounds contexts retained only for accessible titles", () => {
+	const host = new OpenDeckHost(launchArguments);
+	const internals = host as unknown as { desiredTitles: Map<string, string> };
+	for (let index = 0; index < MAX_OPENDECK_LIVE_CONTEXTS; index += 1) {
+		host.setTitle(`title-context-${index}`, `title-${index}`);
+	}
+	host.setTitle("one-context-too-many", "rejected");
+
+	assert.equal(internals.desiredTitles.size, MAX_OPENDECK_LIVE_CONTEXTS);
+	assert.equal(internals.desiredTitles.has("one-context-too-many"), false);
 });
 
 test("the host drops excess unresolved event handlers and recovers capacity", async () => {

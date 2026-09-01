@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { getDisplay, renderDashboard } from "../src/render.js";
+import { getAccessibleTitle, getDisplay, renderDashboard } from "../src/render.js";
 import type { DashboardModel, ThreadSummary } from "../src/types.js";
 
 function summary(overrides: Partial<ThreadSummary> = {}): ThreadSummary {
@@ -124,6 +124,37 @@ describe("getDisplay", () => {
 
 		for (const [model, expected] of cases) {
 			assert.deepEqual(getDisplay(model), expected);
+		}
+	});
+});
+
+describe("getAccessibleTitle", () => {
+	test("describes connection states and an empty dashboard", () => {
+		assert.equal(getAccessibleTitle({ kind: "loading" }), "Loading T3 Code status");
+		assert.equal(getAccessibleTitle({ kind: "offline" }), "T3 Code offline");
+		assert.equal(getAccessibleTitle({ kind: "error" }), "T3 Code status error");
+		assert.equal(
+			getAccessibleTitle({ kind: "ready", refreshedAt: 0, summary: summary() }),
+			"No open T3 Code threads",
+		);
+	});
+
+	test("describes working, waiting, attention, and error counts", () => {
+		const cases: Array<[Partial<ThreadSummary>, string]> = [
+			[{ total: 1, running: 1, working: 1 }, "1 of 1 thread working"],
+			[{ total: 6, running: 6, working: 6 }, "6 of 6 threads working"],
+			[{ total: 6, running: 4, attention: 2, waiting: 2, working: 4 }, "4 of 6 working, 2 waiting"],
+			[
+				{ total: 2, running: 1, attention: 1, approval: 1, working: 1 },
+				"1 of 2 working, 1 needs your attention",
+			],
+			[{ total: 2, attention: 2, failed: 2 }, "0 of 2 working, 2 errors"],
+		];
+		for (const [overrides, expected] of cases) {
+			assert.equal(
+				getAccessibleTitle({ kind: "ready", refreshedAt: 0, summary: summary(overrides) }),
+				expected,
+			);
 		}
 	});
 });

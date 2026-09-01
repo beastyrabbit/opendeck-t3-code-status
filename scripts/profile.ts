@@ -13,6 +13,7 @@ export interface OpenDeckProfile {
 export interface PlacementResult {
 	alreadyPresent: boolean;
 	position: number;
+	profileChanged: boolean;
 }
 
 export function parseOpenDeckProfile(raw: string, path: string): OpenDeckProfile {
@@ -78,13 +79,26 @@ export function assertOpenDeckProfileStructure(root: unknown, path: string): voi
 }
 
 export function placeOverview(profile: OpenDeckProfile): PlacementResult {
-	const existingPosition = profile.keys.findIndex((key) => actionUuid(key) === ACTION_UUID);
-	if (existingPosition >= 0) return { alreadyPresent: true, position: existingPosition };
+	let existingPosition = -1;
+	let existingProfileChanged = false;
+	for (let position = 0; position < profile.keys.length; position += 1) {
+		const existing = profile.keys[position];
+		if (!existing || actionUuid(existing) !== ACTION_UUID) continue;
+		if (existingPosition < 0) existingPosition = position;
+		existingProfileChanged = migrateOverviewAccessibility(existing) || existingProfileChanged;
+	}
+	if (existingPosition >= 0) {
+		return {
+			alreadyPresent: true,
+			position: existingPosition,
+			profileChanged: existingProfileChanged,
+		};
+	}
 
 	const position = profile.keys.indexOf(null);
 	if (position < 0) throw new Error("The selected OpenDeck profile has no free key.");
 	profile.keys[position] = createOverviewSlot(position);
-	return { alreadyPresent: false, position };
+	return { alreadyPresent: false, position, profileChanged: true };
 }
 
 export function createOverviewSlot(position: number): Record<string, unknown> {
@@ -120,6 +134,56 @@ function actionUuid(slot: Record<string, unknown> | null): string | undefined {
 	return isRecord(action) && typeof action.uuid === "string" ? action.uuid : undefined;
 }
 
+function migrateOverviewAccessibility(slot: Record<string, unknown>): boolean {
+	const action = slot.action;
+	if (!isRecord(action)) return false;
+	const image = firstStateImage(slot) ?? firstStateImage(action) ?? action.icon;
+	const fallbackImage = typeof image === "string" ? image : `plugins/${PLUGIN_DIRECTORY}/icons/action.svg`;
+	const instanceChanged = migrateStateList(slot, fallbackImage);
+	const actionChanged = migrateStateList(action, fallbackImage);
+	return instanceChanged || actionChanged;
+}
+
+function firstStateImage(owner: Record<string, unknown>): string | undefined {
+	const states = owner.states;
+	if (!Array.isArray(states)) return undefined;
+	for (const state of states) {
+		if (isRecord(state) && typeof state.image === "string") return state.image;
+	}
+	return undefined;
+}
+
+function migrateStateList(owner: Record<string, unknown>, fallbackImage: string): boolean {
+	const states = owner.states;
+	if (!Array.isArray(states) || states.length === 0) {
+		owner.states = [actionState(fallbackImage)];
+		return true;
+	}
+
+	let changed = false;
+	for (let index = 0; index < states.length; index += 1) {
+		const state = states[index];
+		if (!isRecord(state)) {
+			states[index] = actionState(fallbackImage);
+			changed = true;
+			continue;
+		}
+		if (state.show !== true) {
+			state.show = true;
+			changed = true;
+		}
+		if (state.size !== 0) {
+			state.size = 0;
+			changed = true;
+		}
+		if (typeof state.text !== "string" || state.text.trim().length === 0) {
+			state.text = "Loading T3 Code status";
+			changed = true;
+		}
+	}
+	return changed;
+}
+
 function actionState(image: string): Record<string, unknown> {
 	return {
 		alignment: "middle",
@@ -129,12 +193,12 @@ function actionState(image: string): Record<string, unknown> {
 		image,
 		image_scale: 100,
 		name: "",
-		show: false,
-		size: 16,
+		show: true,
+		size: 0,
 		stroke_colour: "#000000",
 		stroke_size: 3,
 		style: "Regular",
-		text: "",
+		text: "Loading T3 Code status",
 		underline: false,
 	};
 }

@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, type TestContext, test } from "node:test";
+import { promisify } from "node:util";
 import { serialize } from "node:v8";
 
 import {
@@ -20,6 +22,7 @@ import {
 	parseLevelDbLog,
 	parseLevelDbTable,
 	readT3ShellCache,
+	sameFileIdentity,
 	T3CacheError,
 } from "../src/t3-cache.js";
 
@@ -33,6 +36,8 @@ const TABLE_MAGIC = Buffer.from("57fb808b247547db", "hex");
 const CRC32C_POLYNOMIAL = 0x82f63b78;
 const CRC32C_MASK_DELTA = 0xa282ead8;
 const MAX_STORED_SHELL_PAYLOAD_BYTES = 8 * 1024 * 1024;
+const WRAPPER_BLOB_MIME_TYPE = "application/vnd.blink-idb-value-wrapper";
+const run = promisify(execFile);
 
 function fixtureCrc32c(buffer: Uint8Array): number {
 	let checksum = 0xffffffff;
@@ -62,13 +67,25 @@ function encodeVarint(input: number): Buffer {
 	return Buffer.from(bytes);
 }
 
-function indexedDbStringKey(environmentId: string, objectStoreId = 2): Buffer {
+function encodeBigVarint(input: bigint): Buffer {
+	let value = input;
+	const bytes: number[] = [];
+	do {
+		let byte = Number(value & 0x7fn);
+		value >>= 7n;
+		if (value > 0n) byte |= 0x80;
+		bytes.push(byte);
+	} while (value > 0n);
+	return Buffer.from(bytes);
+}
+
+function indexedDbStringKey(environmentId: string, objectStoreId = 2, indexId = 1): Buffer {
 	const encoded = Buffer.alloc(environmentId.length * 2);
 	for (let index = 0; index < environmentId.length; index += 1) {
 		encoded.writeUInt16BE(environmentId.charCodeAt(index), index * 2);
 	}
 	return Buffer.concat([
-		Buffer.from([0, 1, objectStoreId, 1, 1]),
+		Buffer.from([0, 1, objectStoreId, indexId, 1]),
 		encodeVarint(environmentId.length),
 		encoded,
 	]);
@@ -106,22 +123,27 @@ function storedString(value: string, compressed = false): Buffer {
 }
 
 function storedSerialized(serialized: Uint8Array, compressed = false): Buffer {
+	return Buffer.concat([encodeVarint(42), blinkWireData(serialized, compressed)]);
+}
+
+function blinkWireData(serialized: Uint8Array, compressed = false): Buffer {
 	const blinkEnvelope = Buffer.concat([Buffer.from([0xff, 21, 0xfe]), Buffer.alloc(12), serialized]);
-	const payload = compressed
+	return compressed
 		? Buffer.concat([Buffer.from([0xff, 0x11, 0x02]), Buffer.from(snappy.compress(blinkEnvelope))])
 		: blinkEnvelope;
-	return Buffer.concat([encodeVarint(42), payload]);
 }
 
 function primitiveV8String(
 	value: string,
 	encoding: "latin1" | "utf16le" | "utf8",
 	paddingBytes?: number,
+	globalOffset = 15,
 ): Buffer {
 	const tags = { latin1: 0x22, utf16le: 0x63, utf8: 0x53 } as const;
 	const encoded = Buffer.from(value, encoding);
 	const encodedLength = encodeVarint(encoded.length);
-	const canonicalPadding = encoding === "utf16le" && (3 + encodedLength.length) % 2 !== 0 ? 1 : 0;
+	const canonicalPadding =
+		encoding === "utf16le" && (globalOffset + 3 + encodedLength.length) % 2 !== 0 ? 1 : 0;
 	return Buffer.concat([
 		Buffer.from([0xff, 0x0f]),
 		Buffer.alloc(paddingBytes ?? canonicalPadding),
@@ -135,15 +157,56 @@ function levelDbRecord(
 	environmentId: string,
 	sequence: number,
 	value: Buffer,
-	options: { objectStoreId?: number; recordType?: 0 | 1 } = {},
+	options: { indexId?: number; objectStoreId?: number; recordType?: 0 | 1 } = {},
 ): LevelDbRecord {
 	return {
-		key: indexedDbStringKey(environmentId, options.objectStoreId),
+		key: indexedDbStringKey(environmentId, options.objectStoreId, options.indexId),
 		offset: 0,
 		recordType: options.recordType ?? 1,
 		sequence: BigInt(sequence),
 		value,
 	};
+}
+
+function externalShellMarker(blobSize: number, blobIndex = 0): Buffer {
+	return Buffer.concat([
+		encodeVarint(42),
+		Buffer.from([0xff, 0x11, 0x01]),
+		encodeVarint(blobSize),
+		encodeVarint(blobIndex),
+	]);
+}
+
+function metadataString(value: string): Buffer {
+	const encoded = Buffer.alloc(value.length * 2);
+	for (let index = 0; index < value.length; index += 1) {
+		encoded.writeUInt16BE(value.charCodeAt(index), index * 2);
+	}
+	return Buffer.concat([encodeBigVarint(BigInt(value.length)), encoded]);
+}
+
+function blobMetadata(blobNumber: bigint, size: bigint, mimeType = WRAPPER_BLOB_MIME_TYPE): Buffer {
+	return Buffer.concat([
+		Buffer.from([0]),
+		encodeBigVarint(blobNumber),
+		metadataString(mimeType),
+		encodeBigVarint(size),
+	]);
+}
+
+function fileMetadata(blobNumber: bigint, size: bigint, lastModified = 1_900_000_000_000_000n): Buffer {
+	return Buffer.concat([
+		Buffer.from([1]),
+		encodeBigVarint(blobNumber),
+		metadataString("text/plain"),
+		encodeBigVarint(size),
+		metadataString("fixture.txt"),
+		encodeBigVarint(lastModified),
+	]);
+}
+
+function fileSystemAccessMetadata(token = Buffer.from([1, 2, 3])): Buffer {
+	return Buffer.concat([Buffer.from([2]), encodeBigVarint(BigInt(token.length)), token]);
 }
 
 interface WriteOperation {
@@ -344,6 +407,78 @@ async function cacheDirectory(context: TestContext): Promise<string> {
 	return directory;
 }
 
+type MetadataState = "live" | "missing" | "stale" | "tombstoned";
+
+async function writeExternalShellCache(
+	context: TestContext,
+	options: {
+		blobContents?: Buffer;
+		blobIndex?: number;
+		blobNumber?: number;
+		compressed?: boolean;
+		dataValue?: Buffer;
+		environmentId?: string;
+		markerSize?: number;
+		metadataEnvironmentId?: string;
+		metadataState?: MetadataState;
+		metadataValue?: Buffer;
+		unrelatedOperations?: readonly WriteOperation[];
+		writeBlob?: boolean;
+	} = {},
+): Promise<{ blobPath: string; directory: string; wireData: Buffer }> {
+	const root = await cacheDirectory(context);
+	const directory = join(root, "t3code_app_0.indexeddb.leveldb");
+	const environmentId = options.environmentId ?? "environment-€";
+	const serialized = primitiveV8String(
+		shellJson(environmentId, 7, [], "2030-01-01T00:00:00.000Z"),
+		"utf16le",
+	);
+	const wireData = blinkWireData(serialized, options.compressed);
+	const markerSize = options.markerSize ?? wireData.length;
+	const blobIndex = options.blobIndex ?? 0;
+	const blobNumber = options.blobNumber ?? 0x1234;
+	const metadataValue = options.metadataValue ?? blobMetadata(BigInt(blobNumber), BigInt(markerSize));
+	const data: WriteOperation = {
+		key: indexedDbStringKey(environmentId),
+		type: 1,
+		value: options.dataValue ?? externalShellMarker(markerSize, blobIndex),
+	};
+	const metadata: WriteOperation = {
+		key: indexedDbStringKey(options.metadataEnvironmentId ?? environmentId, 2, 3),
+		type: 1,
+		value: metadataValue,
+	};
+	let operations: WriteOperation[];
+	if (options.metadataState === "missing") operations = [data];
+	else if (options.metadataState === "stale") operations = [metadata, data];
+	else if (options.metadataState === "tombstoned") {
+		operations = [data, metadata, { key: metadata.key, type: 0 }];
+	} else operations = [data, metadata];
+	operations.push(...(options.unrelatedOperations ?? []));
+
+	await mkdir(directory, { recursive: true });
+	await writeFile(join(directory, "000001.log"), logFile(20n, operations));
+	const blobPath = join(
+		root,
+		"t3code_app_0.indexeddb.blob",
+		"1",
+		(Math.floor(blobNumber / 256) % 256).toString(16).padStart(2, "0"),
+		blobNumber.toString(16),
+	);
+	if (options.writeBlob !== false) {
+		await mkdir(join(blobPath, ".."), { recursive: true });
+		await writeFile(blobPath, options.blobContents ?? wireData);
+	}
+	return { blobPath, directory, wireData };
+}
+
+async function assertCacheError(
+	promise: Promise<unknown>,
+	code: "corrupt" | "inconsistent" | "unsupported",
+): Promise<void> {
+	await assert.rejects(promise, (error: unknown) => error instanceof T3CacheError && error.code === code);
+}
+
 async function writeProfileCache(
 	configDirectory: string,
 	profileName: string,
@@ -446,11 +581,36 @@ describe("Chromium IndexedDB primitives", () => {
 			Buffer.from([0xff, 0x0f, 0x53, 0x02, 0xc3, 0x28]),
 			primitiveV8String(`\uFEFF${validJson}`, "utf8"),
 			primitiveV8String(validJson, "latin1", 1),
-			primitiveV8String(validJson, "utf16le", 0),
+			primitiveV8String(validJson, "utf16le", 1),
 			primitiveV8String(validJson, "utf16le", 2),
 		]) {
 			assertCorrupt(() => decodeStoredShellValue(storedSerialized(serialized)));
 		}
+	});
+
+	test("aligns two-byte strings against the complete Blink wire payload", () => {
+		const validJson = shellJson("environment-€", 7, [], "2030-01-01T00:00:00.000Z");
+		const blinkAligned = primitiveV8String(validJson, "utf16le", undefined, 15);
+		assert.equal(decodeStoredShellValue(storedSerialized(blinkAligned)).environmentId, "environment-€");
+
+		const standaloneAligned = primitiveV8String(validJson, "utf16le", undefined, 0);
+		assertCorrupt(() => decodeStoredShellValue(storedSerialized(standaloneAligned)));
+
+		const threeByteLengthJson = `${validJson.slice(0, -1)},"padding":"${"x".repeat(9_000)}"}`;
+		const threeByteBlinkAligned = primitiveV8String(threeByteLengthJson, "utf16le", undefined, 15);
+		assert.deepEqual([...threeByteBlinkAligned.subarray(0, 4)], [0xff, 0x0f, 0, 0x63]);
+		assert.equal((threeByteBlinkAligned[4] ?? 0) & 0x80, 0x80);
+		assert.equal((threeByteBlinkAligned[5] ?? 0) & 0x80, 0x80);
+		assert.equal((threeByteBlinkAligned[6] ?? 0) & 0x80, 0);
+		assert.equal(
+			decodeStoredShellValue(storedSerialized(threeByteBlinkAligned)).environmentId,
+			"environment-€",
+		);
+		assertCorrupt(() =>
+			decodeStoredShellValue(
+				storedSerialized(primitiveV8String(threeByteLengthJson, "utf16le", undefined, 0)),
+			),
+		);
 	});
 
 	test("rejects V8 string format versions other than the observed T3 format", () => {
@@ -468,7 +628,8 @@ describe("Chromium IndexedDB primitives", () => {
 		const records = [
 			levelDbRecord("credential-like-key", 10, invalidSecretStoreValue, { objectStoreId: 1 }),
 			levelDbRecord("thread-key", 11, invalidSecretStoreValue, { objectStoreId: 3 }),
-			levelDbRecord("environment-a", 12, shellSnapshot("environment-a", 12)),
+			levelDbRecord("blob-metadata", 12, invalidSecretStoreValue, { indexId: 3 }),
+			levelDbRecord("environment-a", 13, shellSnapshot("environment-a", 13)),
 		];
 		assert.deepEqual(
 			collectCachedT3Shells(records).map(({ environmentId }) => environmentId),
@@ -711,12 +872,213 @@ describe("LevelDB readers", () => {
 	});
 });
 
+describe("stable file identity", () => {
+	test("accepts Windows lstat and fstat identities when Node reports different devices", () => {
+		assert.equal(sameFileIdentity({ dev: 2n, ino: 42n }, { dev: 0n, ino: 42n }, "win32"), true);
+	});
+
+	test("rejects changed and unavailable Windows file IDs", () => {
+		assert.equal(sameFileIdentity({ dev: 2n, ino: 42n }, { dev: 0n, ino: 43n }, "win32"), false);
+		assert.equal(sameFileIdentity({ dev: 2n, ino: 0n }, { dev: 0n, ino: 0n }, "win32"), false);
+	});
+
+	test("requires matching devices on Unix", () => {
+		assert.equal(sameFileIdentity({ dev: 2n, ino: 42n }, { dev: 3n, ino: 42n }, "linux"), false);
+		assert.equal(sameFileIdentity({ dev: 2n, ino: 42n }, { dev: 2n, ino: 42n }, "darwin"), true);
+	});
+});
+
 test("rejects Blink trailers that extend beyond the stored value", () => {
 	const serialized = serialize(shellJson("environment-a", 1, [], "2030-01-01T00:00:00.000Z"));
 	const envelope = Buffer.concat([Buffer.from([0xff, 21, 0xfe]), Buffer.alloc(12), serialized]);
 	envelope.writeBigUInt64BE(BigInt(envelope.length), 3);
 	envelope.writeUInt32BE(1, 11);
 	assertCorrupt(() => decodeStoredShellValue(Buffer.concat([encodeVarint(42), envelope])));
+});
+
+describe("external Chromium IndexedDB values", () => {
+	for (const compressed of [false, true]) {
+		test(`reads a ${compressed ? "Snappy-compressed" : "raw"} wrapper blob`, async (context) => {
+			const { directory } = await writeExternalShellCache(context, {
+				compressed,
+				unrelatedOperations: [
+					{
+						key: indexedDbStringKey("not-a-shell", 3, 3),
+						type: 1,
+						value: Buffer.from("not external-object metadata"),
+					},
+					{
+						key: indexedDbStringKey("not-object-store-data", 2, 2),
+						type: 1,
+						value: Buffer.from("not a serialized value"),
+					},
+				],
+			});
+
+			const shells = await readT3ShellCache({ directory });
+			assert.equal(shells.length, 1);
+			assert.equal(shells[0]?.environmentId, "environment-€");
+			assert.equal(shells[0]?.snapshot.snapshotSequence, 7);
+		});
+	}
+
+	test("derives the blob directory from bits 8 through 15 of the blob number", async (context) => {
+		const { directory } = await writeExternalShellCache(context, { blobNumber: 0x12345 });
+		assert.equal((await readT3ShellCache({ directory }))[0]?.environmentId, "environment-€");
+	});
+
+	test("counts Blob/File entries for blobIndex but permits later FSA metadata", async (context) => {
+		const preliminaryFile = fileMetadata(2n, 5n);
+		const precedingFsa = fileSystemAccessMetadata(Buffer.from([4, 5]));
+		const placeholder = await writeExternalShellCache(context, { writeBlob: false });
+		const metadataValue = Buffer.concat([
+			preliminaryFile,
+			precedingFsa,
+			blobMetadata(0x1234n, BigInt(placeholder.wireData.length)),
+			fileSystemAccessMetadata(Buffer.from([6, 7])),
+		]);
+		await rm(placeholder.directory, { recursive: true });
+		const { directory } = await writeExternalShellCache(context, {
+			blobIndex: 1,
+			metadataValue,
+		});
+
+		assert.equal((await readT3ShellCache({ directory }))[0]?.environmentId, "environment-€");
+	});
+
+	for (const state of ["missing", "stale", "tombstoned"] as const) {
+		test(`treats ${state} wrapper metadata as an inconsistent snapshot`, async (context) => {
+			const { directory } = await writeExternalShellCache(context, { metadataState: state });
+			await assertCacheError(readT3ShellCache({ directory }), "inconsistent");
+		});
+	}
+
+	test("requires the metadata key to have the exact same encoded user-key suffix", async (context) => {
+		const { directory } = await writeExternalShellCache(context, {
+			metadataEnvironmentId: "another-environment",
+		});
+		await assertCacheError(readT3ShellCache({ directory }), "inconsistent");
+	});
+
+	test("treats a missing or size-changing blob file as inconsistent", async (context) => {
+		const missing = await writeExternalShellCache(context, { writeBlob: false });
+		await assertCacheError(readT3ShellCache({ directory: missing.directory }), "inconsistent");
+
+		const wrongSize = await writeExternalShellCache(context, { blobContents: Buffer.from([1]) });
+		await assertCacheError(readT3ShellCache({ directory: wrongSize.directory }), "inconsistent");
+	});
+
+	test("rejects a FIFO blob without blocking the cache read", {
+		skip: process.platform !== "linux",
+	}, async (context) => {
+		const { blobPath, directory } = await writeExternalShellCache(context, { writeBlob: false });
+		await mkdir(join(blobPath, ".."), { recursive: true });
+		await run("mkfifo", [blobPath]);
+		const readerUrl = new URL("../src/t3-cache.ts", import.meta.url).href;
+		const script = `
+			const { readT3ShellCache, T3CacheError } = await import(${JSON.stringify(readerUrl)});
+			try {
+				await readT3ShellCache({ directory: process.env.T3_TEST_CACHE_DIR });
+				process.exitCode = 2;
+			} catch (error) {
+				if (!(error instanceof T3CacheError) || error.code !== "unsupported") process.exitCode = 3;
+			}
+		`;
+		await run(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
+			env: { ...process.env, T3_TEST_CACHE_DIR: directory },
+			timeout: 5_000,
+		});
+	});
+
+	test("rejects malformed wrappers and metadata without opening a blob", async (context) => {
+		const malformedWrapper = await writeExternalShellCache(context, {
+			dataValue: Buffer.concat([externalShellMarker(1), Buffer.from([0])]),
+		});
+		await assertCacheError(readT3ShellCache({ directory: malformedWrapper.directory }), "corrupt");
+
+		const wrongMime = await writeExternalShellCache(context, {
+			metadataValue: blobMetadata(0x1234n, 1n, "application/octet-stream"),
+			markerSize: 1,
+		});
+		await assertCacheError(readT3ShellCache({ directory: wrongMime.directory }), "corrupt");
+
+		const truncatedMetadata = await writeExternalShellCache(context, {
+			metadataValue: Buffer.from([0, 0x80]),
+		});
+		await assertCacheError(readT3ShellCache({ directory: truncatedMetadata.directory }), "corrupt");
+
+		const aboveSignedInt64 = 1n << 63n;
+		for (const metadataValue of [
+			blobMetadata(aboveSignedInt64, 1n),
+			blobMetadata(0x1234n, aboveSignedInt64),
+			Buffer.concat([fileMetadata(2n, 1n, aboveSignedInt64), blobMetadata(0x1234n, 1n)]),
+		]) {
+			const outOfRangeMetadata = await writeExternalShellCache(context, {
+				blobIndex: metadataValue[0] === 1 ? 1 : 0,
+				markerSize: 1,
+				metadataValue,
+			});
+			await assertCacheError(readT3ShellCache({ directory: outOfRangeMetadata.directory }), "corrupt");
+		}
+	});
+
+	test("requires matching declared sizes and exactly one final wrapper Blob", async (context) => {
+		const sizeMismatch = await writeExternalShellCache(context, {
+			markerSize: 1,
+			metadataValue: blobMetadata(0x1234n, 2n),
+		});
+		await assertCacheError(readT3ShellCache({ directory: sizeMismatch.directory }), "corrupt");
+
+		const targetIsFile = await writeExternalShellCache(context, {
+			blobIndex: 0,
+			metadataValue: fileMetadata(0x1234n, 1n),
+			markerSize: 1,
+		});
+		await assertCacheError(readT3ShellCache({ directory: targetIsFile.directory }), "corrupt");
+
+		const duplicateWrapper = await writeExternalShellCache(context, { writeBlob: false });
+		const duplicateMetadata = Buffer.concat([
+			blobMetadata(2n, 1n),
+			blobMetadata(0x1234n, BigInt(duplicateWrapper.wireData.length)),
+		]);
+		await rm(duplicateWrapper.directory, { recursive: true });
+		const duplicate = await writeExternalShellCache(context, {
+			blobIndex: 1,
+			metadataValue: duplicateMetadata,
+		});
+		await assertCacheError(readT3ShellCache({ directory: duplicate.directory }), "corrupt");
+
+		const wrapperBeforeAnotherBlob = await writeExternalShellCache(context, { writeBlob: false });
+		const nonFinal = await writeExternalShellCache(context, {
+			metadataValue: Buffer.concat([
+				blobMetadata(0x1234n, BigInt(wrapperBeforeAnotherBlob.wireData.length)),
+				blobMetadata(3n, 1n, "application/octet-stream"),
+			]),
+		});
+		await assertCacheError(readT3ShellCache({ directory: nonFinal.directory }), "corrupt");
+	});
+
+	test("rejects oversized wrapper blobs before filesystem allocation", async (context) => {
+		const { directory } = await writeExternalShellCache(context, {
+			markerSize: MAX_STORED_SHELL_PAYLOAD_BYTES + 1,
+			writeBlob: false,
+		});
+		await assertCacheError(readT3ShellCache({ directory }), "unsupported");
+	});
+
+	test("rejects corrupt wire data loaded from a correctly sized blob", async (context) => {
+		const { directory } = await writeExternalShellCache(context, {
+			blobContents: Buffer.from("not Blink wire data"),
+			markerSize: Buffer.byteLength("not Blink wire data"),
+		});
+		await assertCacheError(readT3ShellCache({ directory }), "corrupt");
+
+		const truncated = await writeExternalShellCache(context, {
+			blobContents: Buffer.from([0xff]),
+			markerSize: 1,
+		});
+		await assertCacheError(readT3ShellCache({ directory: truncated.directory }), "corrupt");
+	});
 });
 
 test("readT3ShellCache merges SST and WAL records without interpreting other stores", async (context) => {

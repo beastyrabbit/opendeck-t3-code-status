@@ -56,7 +56,6 @@ function connectElgatoStreamDeckSocket(
 	}
 	inspectorContext = inPropertyInspectorUUID;
 	actionContext = isBoundedContext(actionInfo.context) ? actionInfo.context : inPropertyInspectorUUID;
-	setSettingsEnabled(true);
 	applySettings(actionInfo.payload?.settings);
 	bindControls();
 	setBusy(true);

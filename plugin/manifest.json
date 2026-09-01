@@ -6,7 +6,6 @@
 	"UUID": "com.beastyrabbit.t3-code-status",
 	"URL": "https://github.com/beastyrabbit/opendeck-t3-code-status",
 	"CodePath": "bin/plugin.cjs",
-	"CodePathLin": "bin/plugin.cjs",
 	"Icon": "icons/plugin",
 	"Category": "T3 Code Status",
 	"CategoryIcon": "icons/category",
@@ -17,6 +16,14 @@
 	"OS": [
 		{
 			"Platform": "linux"
+		},
+		{
+			"Platform": "mac",
+			"MinimumVersion": "10.15"
+		},
+		{
+			"Platform": "windows",
+			"MinimumVersion": "10"
 		}
 	],
 	"Nodejs": {
@@ -35,9 +42,11 @@
 			"PropertyInspectorPath": "property-inspector/index.html",
 			"States": [
 				{
+					"FontSize": 0,
 					"Image": "icons/action",
+					"Title": "Loading T3 Code status",
 					"TitleAlignment": "middle",
-					"ShowTitle": false
+					"ShowTitle": true
 				}
 			]
 		}

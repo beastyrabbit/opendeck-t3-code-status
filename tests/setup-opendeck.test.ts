@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { platform, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
+import { promisify } from "node:util";
 
 import {
+	createOverviewSlot,
 	MAX_OPENDECK_PROFILE_DEPTH,
 	MAX_OPENDECK_PROFILE_KEYS,
 	MAX_OPENDECK_PROFILE_VALUES,
@@ -20,6 +23,8 @@ import {
 } from "../scripts/setup-opendeck.js";
 import { ACTION_UUID } from "../src/types.js";
 
+const run = promisify(execFile);
+
 test("setup installs the plugin and adds one overview to Default", async () => {
 	const root = await mkdtemp(join(tmpdir(), "t3-opendeck-setup-"));
 	try {
@@ -33,7 +38,7 @@ test("setup installs the plugin and adds one overview to Default", async () => {
 			profilePath,
 			`${JSON.stringify({ infobars: [], keys: [{ occupied: true }, null, null], sliders: [] })}\n`,
 		);
-		await chmod(profilePath, 0o600);
+		if (platform() !== "win32") await chmod(profilePath, 0o600);
 
 		const firstRun = await runSetup(configRoot, pluginSource);
 		assert.equal(firstRun.profile, "Default");
@@ -49,7 +54,7 @@ test("setup installs the plugin and adds one overview to Default", async () => {
 			keys: Array<{ action?: { uuid?: string }; settings?: { refreshSeconds?: number } } | null>;
 		};
 		assert.equal(firstProfile.keys[1]?.action?.uuid, ACTION_UUID);
-		assert.equal((await stat(profilePath)).mode & 0o777, 0o600);
+		if (platform() !== "win32") assert.equal((await stat(profilePath)).mode & 0o777, 0o600);
 		firstProfile.keys[1] = {
 			...firstProfile.keys[1],
 			settings: { refreshSeconds: 90 },
@@ -101,19 +106,117 @@ test("setup dry-run makes no changes", async () => {
 	}
 });
 
+test("setup dry-run reports and then migrates an earlier key without losing settings", async () => {
+	const root = await mkdtemp(join(tmpdir(), "t3-opendeck-upgrade-"));
+	try {
+		const configRoot = join(root, "opendeck");
+		const pluginSource = join(root, "built", PLUGIN_DIRECTORY);
+		const profileDirectory = join(configRoot, "profiles", "deck-1");
+		const profilePath = join(profileDirectory, "Default.json");
+		await createPluginSource(pluginSource, "upgrade build");
+		await mkdir(profileDirectory, { recursive: true });
+
+		const oldSlot = createOverviewSlot(2);
+		const oldAction = oldSlot.action as Record<string, unknown>;
+		const oldState = (oldSlot.states as Array<Record<string, unknown>>)[0];
+		const oldActionState = (oldAction.states as Array<Record<string, unknown>>)[0];
+		assert.ok(oldState && oldActionState);
+		Object.assign(oldState, { show: false, size: 16, text: "" });
+		Object.assign(oldActionState, { show: false, size: 16, text: "" });
+		oldSlot.settings = { custom: "kept", refreshSeconds: 90 };
+		oldSlot.unknown = { nested: true };
+		oldAction.unknown = ["kept"];
+		const originalProfile = `${JSON.stringify({ keys: [null, null, oldSlot] })}\n`;
+		await writeFile(profilePath, originalProfile);
+
+		const dryRun = await runSetup(configRoot, pluginSource, true);
+		assert.deepEqual(
+			{
+				alreadyPresent: dryRun.alreadyPresent,
+				position: dryRun.position,
+				profileChanged: dryRun.profileChanged,
+			},
+			{ alreadyPresent: true, position: 2, profileChanged: true },
+		);
+		assert.equal(await readFile(profilePath, "utf8"), originalProfile);
+		await assert.rejects(() => stat(join(configRoot, "plugins")), { code: "ENOENT" });
+
+		const result = await runSetup(configRoot, pluginSource);
+		assert.equal(result.alreadyPresent, true);
+		assert.equal(result.profileChanged, true);
+		const migratedProfile = JSON.parse(await readFile(profilePath, "utf8")) as {
+			keys: Array<Record<string, unknown> | null>;
+		};
+		const migratedSlot = migratedProfile.keys[2];
+		assert.ok(migratedSlot);
+		const migratedAction = migratedSlot.action as Record<string, unknown>;
+		assert.deepEqual(migratedSlot.settings, { custom: "kept", refreshSeconds: 90 });
+		assert.deepEqual(migratedSlot.unknown, { nested: true });
+		assert.deepEqual(migratedAction.unknown, ["kept"]);
+		for (const owner of [migratedSlot, migratedAction]) {
+			const state = (owner.states as Array<Record<string, unknown>>)[0];
+			assert.deepEqual(
+				{ show: state?.show, size: state?.size, text: state?.text },
+				{ show: true, size: 0, text: "Loading T3 Code status" },
+			);
+		}
+		const profileFiles = await readdir(profileDirectory);
+		assert.equal(profileFiles.filter((name) => name.startsWith("Default.json.backup-")).length, 1);
+	} finally {
+		await rm(root, { force: true, recursive: true });
+	}
+});
+
 test("setup has no CLI option that bypasses the running OpenDeck guard", () => {
 	assert.throws(() => parseSetupArguments(["--allow-running"]), /Unknown setup option/);
 });
 
 test("setup uses XDG_CONFIG_HOME on Linux", () => {
+	const userHome = resolve("test-fixtures", "home");
+	const xdgConfigHome = resolve("test-fixtures", "xdg");
 	assert.equal(
-		defaultOpenDeckConfigRoot("linux", { XDG_CONFIG_HOME: "/tmp/custom-config" }, "/home/tester"),
-		"/tmp/custom-config/opendeck",
+		defaultOpenDeckConfigRoot("linux", { XDG_CONFIG_HOME: xdgConfigHome }, userHome),
+		resolve(xdgConfigHome, "opendeck"),
 	);
 	assert.equal(
-		defaultOpenDeckConfigRoot("linux", { XDG_CONFIG_HOME: "relative/config" }, "/home/tester"),
-		"/home/tester/.config/opendeck",
+		defaultOpenDeckConfigRoot("linux", { XDG_CONFIG_HOME: "relative/config" }, userHome),
+		resolve(userHome, ".config", "opendeck"),
 	);
+});
+
+test("setup resolves the native OpenDeck config roots", () => {
+	const userHome = resolve("test-fixtures", "home");
+	const appData = resolve("test-fixtures", "roaming");
+	assert.equal(
+		defaultOpenDeckConfigRoot("darwin", {}, userHome),
+		resolve(userHome, "Library", "Application Support", "opendeck"),
+	);
+	assert.equal(
+		defaultOpenDeckConfigRoot("win32", { APPDATA: appData }, userHome),
+		resolve(appData, "opendeck"),
+	);
+	assert.equal(
+		defaultOpenDeckConfigRoot("win32", { APPDATA: "relative/app-data" }, userHome),
+		resolve(userHome, "AppData", "Roaming", "opendeck"),
+	);
+});
+
+test("setup rejects non-Linux hosts before accessing setup paths", async () => {
+	let processCheckCalled = false;
+	await assert.rejects(
+		setupOpenDeck(
+			{ configRoot: "\0", dryRun: false, pluginSource: "\0" },
+			{
+				isOpenDeckRunning: async () => {
+					processCheckCalled = true;
+					return false;
+				},
+				platform: "darwin",
+			},
+		),
+		/Automatic OpenDeck profile setup is currently supported on Linux only/,
+	);
+	assert.equal(processCheckCalled, false);
 });
 
 test("setup refuses to change files while OpenDeck is running", async () => {
@@ -130,7 +233,10 @@ test("setup refuses to change files while OpenDeck is running", async () => {
 
 		await assert.rejects(
 			() =>
-				setupOpenDeck({ configRoot, dryRun: false, pluginSource }, { isOpenDeckRunning: async () => true }),
+				setupOpenDeck(
+					{ configRoot, dryRun: false, pluginSource },
+					{ isOpenDeckRunning: async () => true, platform: "linux" },
+				),
 			/OpenDeck is running/,
 		);
 		assert.equal(await readFile(profilePath, "utf8"), profile);
@@ -153,12 +259,61 @@ test("setup rejects a symbolic-link profile", async () => {
 		await symlink(redirectedProfile, join(profileDirectory, "Default.json"));
 
 		await assert.rejects(
-			setupOpenDeck({ configRoot, dryRun: false, pluginSource }, { isOpenDeckRunning: async () => false }),
+			setupOpenDeck(
+				{ configRoot, dryRun: false, pluginSource },
+				{ isOpenDeckRunning: async () => false, platform: "linux" },
+			),
 			/OpenDeck profile must be a real file/,
 		);
 		assert.equal(await readFile(redirectedProfile, "utf8"), `${JSON.stringify({ keys: [null] })}\n`);
 	} finally {
 		await rm(root, { force: true, recursive: true });
+	}
+});
+
+test("setup rejects selector and profile FIFOs without blocking", {
+	skip: process.platform !== "linux",
+}, async (context) => {
+	const setupUrl = new URL("../scripts/setup-opendeck.ts", import.meta.url).href;
+	for (const target of ["selector", "profile"] as const) {
+		const root = await mkdtemp(join(tmpdir(), `t3-opendeck-${target}-fifo-`));
+		context.after(() => rm(root, { force: true, recursive: true }));
+		const configRoot = join(root, "opendeck");
+		const profilesRoot = join(configRoot, "profiles");
+		const profileDirectory = join(profilesRoot, "deck-1");
+		await mkdir(profileDirectory, { recursive: true });
+		if (target === "selector") {
+			await writeFile(join(profileDirectory, "First.json"), JSON.stringify({ keys: [null] }));
+			await writeFile(join(profileDirectory, "Second.json"), JSON.stringify({ keys: [null] }));
+			await run("mkfifo", [join(profilesRoot, "deck-1.json")]);
+		} else {
+			await run("mkfifo", [join(profileDirectory, "Default.json")]);
+		}
+
+		const script = `
+				const { setupOpenDeck } = await import(${JSON.stringify(setupUrl)});
+				try {
+					await setupOpenDeck(
+						{
+							configRoot: process.env.T3_TEST_CONFIG_ROOT,
+							dryRun: true,
+							${target === "profile" ? 'profile: "Default",' : ""}
+						},
+						{ isOpenDeckRunning: async () => false, platform: "linux" },
+					);
+					process.exitCode = 2;
+				} catch (error) {
+					if (!(error instanceof Error) || !${
+						target === "selector"
+							? "/Could not determine/.test(error.message)"
+							: "/must be a real file/.test(error.message)"
+					}) process.exitCode = 3;
+				}
+			`;
+		await run(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
+			env: { ...process.env, T3_TEST_CONFIG_ROOT: configRoot },
+			timeout: 5_000,
+		});
 	}
 });
 
@@ -249,6 +404,7 @@ test("setup rechecks the profile byte limit before plugin installation", async (
 							await writeFile(profilePath, oversizedProfile);
 							return false;
 						},
+						platform: "linux",
 					},
 				),
 			/profile exceeds .*size limit/,
@@ -345,7 +501,10 @@ test("setup rejects profile structure limits before any write", async () => {
 });
 
 async function runSetup(configRoot: string, pluginSource: string, dryRun = false): Promise<SetupResult> {
-	return setupOpenDeck({ configRoot, dryRun, pluginSource }, { isOpenDeckRunning: async () => false });
+	return setupOpenDeck(
+		{ configRoot, dryRun, pluginSource },
+		{ isOpenDeckRunning: async () => false, platform: "linux" },
+	);
 }
 
 async function createPluginSource(path: string, bundle: string): Promise<void> {

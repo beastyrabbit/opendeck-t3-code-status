@@ -5,13 +5,14 @@ const RECONNECT_MIN_MS = 500;
 const RECONNECT_RESET_MS = 5_000;
 const WEBSOCKET_MAX_PAYLOAD = 1024 * 1024;
 const WEBSOCKET_MAX_BUFFERED_BYTES = 256 * 1024;
-const IMAGE_FLUSH_RETRY_MS = 50;
+const STATE_FLUSH_RETRY_MS = 50;
 
 // Contexts are opaque host identifiers, but real OpenDeck values are short UUID-like
 // strings. These limits leave room for many decks while bounding retained hostile input.
 export const MAX_OPENDECK_CONTEXT_CODE_UNITS = 256;
 export const MAX_OPENDECK_LIVE_CONTEXTS = 128;
 export const MAX_OPENDECK_PENDING_HANDLERS = 64;
+export const MAX_OPENDECK_TITLE_CODE_UNITS = 256;
 
 export interface OpenDeckLaunchArguments {
 	info: unknown;
@@ -35,6 +36,7 @@ export interface OpenDeckConnection {
 	sendToPropertyInspector(action: string, context: string, payload: object): void;
 	setImage(context: string, image: string): void;
 	setSettings(context: string, settings: object): void;
+	setTitle(context: string, title: string): void;
 }
 
 export function canQueueWebSocketMessage(bufferedAmount: number, messageBytes: number): boolean {
@@ -52,20 +54,27 @@ export function isValidOpenDeckContext(value: unknown): value is string {
 	return typeof value === "string" && value.length > 0 && value.length <= MAX_OPENDECK_CONTEXT_CODE_UNITS;
 }
 
+export function isValidOpenDeckTitle(value: unknown): value is string {
+	return typeof value === "string" && value.length > 0 && value.length <= MAX_OPENDECK_TITLE_CODE_UNITS;
+}
+
 export class OpenDeckHost implements OpenDeckConnection {
 	readonly launchArguments: OpenDeckLaunchArguments;
 
 	private connectPromise?: Promise<void>;
 	private connectResolve?: () => void;
+	private desiredContexts = new Set<string>();
 	private desiredImages = new Map<string, string>();
+	private desiredTitles = new Map<string, string>();
 	private eventHandler?: OpenDeckEventHandler;
-	private imageFlushTimer?: NodeJS.Timeout;
 	private pendingEventHandlers = 0;
 	private reconnectAttempts = 0;
 	private reconnectResetTimer?: NodeJS.Timeout;
 	private reconnectTimer?: NodeJS.Timeout;
 	private sentImages = new Map<string, string>();
+	private sentTitles = new Map<string, string>();
 	private socket?: WebSocket;
+	private stateFlushTimer?: NodeJS.Timeout;
 	private started = false;
 	private stopped = false;
 
@@ -93,10 +102,10 @@ export class OpenDeckHost implements OpenDeckConnection {
 		this.stopped = true;
 		if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
 		if (this.reconnectResetTimer) clearTimeout(this.reconnectResetTimer);
-		if (this.imageFlushTimer) clearTimeout(this.imageFlushTimer);
+		if (this.stateFlushTimer) clearTimeout(this.stateFlushTimer);
 		this.reconnectTimer = undefined;
 		this.reconnectResetTimer = undefined;
-		this.imageFlushTimer = undefined;
+		this.stateFlushTimer = undefined;
 		this.connectResolve?.();
 		this.connectResolve = undefined;
 
@@ -108,10 +117,7 @@ export class OpenDeckHost implements OpenDeckConnection {
 	}
 
 	setImage(context: string, image: string): void {
-		if (!isValidOpenDeckContext(context)) return;
-		if (!this.desiredImages.has(context) && this.desiredImages.size >= MAX_OPENDECK_LIVE_CONTEXTS) {
-			return;
-		}
+		if (!this.retainContext(context)) return;
 		this.desiredImages.set(context, image);
 		if (this.sentImages.get(context) === image) return;
 		if (
@@ -123,7 +129,24 @@ export class OpenDeckHost implements OpenDeckConnection {
 		) {
 			this.sentImages.set(context, image);
 		} else if (this.socket?.readyState === WebSocket.OPEN) {
-			this.scheduleImageFlush();
+			this.scheduleStateFlush();
+		}
+	}
+
+	setTitle(context: string, title: string): void {
+		if (!isValidOpenDeckTitle(title) || !this.retainContext(context)) return;
+		this.desiredTitles.set(context, title);
+		if (this.sentTitles.get(context) === title) return;
+		if (
+			this.send({
+				context,
+				event: "setTitle",
+				payload: { target: 0, title },
+			})
+		) {
+			this.sentTitles.set(context, title);
+		} else if (this.socket?.readyState === WebSocket.OPEN) {
+			this.scheduleStateFlush();
 		}
 	}
 
@@ -133,8 +156,11 @@ export class OpenDeckHost implements OpenDeckConnection {
 	}
 
 	forgetContext(context: string): void {
+		this.desiredContexts.delete(context);
 		this.desiredImages.delete(context);
+		this.desiredTitles.delete(context);
 		this.sentImages.delete(context);
+		this.sentTitles.delete(context);
 	}
 
 	sendToPropertyInspector(action: string, context: string, payload: object): void {
@@ -156,11 +182,12 @@ export class OpenDeckHost implements OpenDeckConnection {
 				return;
 			}
 			this.sentImages.clear();
+			this.sentTitles.clear();
 			this.send({
 				event: this.launchArguments.registerEvent,
 				uuid: this.launchArguments.pluginUUID,
 			});
-			this.flushImages();
+			this.flushStates();
 			this.reconnectResetTimer = setTimeout(() => {
 				if (this.socket === socket && socket.readyState === WebSocket.OPEN) this.reconnectAttempts = 0;
 				this.reconnectResetTimer = undefined;
@@ -181,6 +208,7 @@ export class OpenDeckHost implements OpenDeckConnection {
 			if (this.reconnectResetTimer) clearTimeout(this.reconnectResetTimer);
 			this.reconnectResetTimer = undefined;
 			this.sentImages.clear();
+			this.sentTitles.clear();
 			this.scheduleReconnect();
 		});
 	}
@@ -236,17 +264,27 @@ export class OpenDeckHost implements OpenDeckConnection {
 		}
 	}
 
-	private flushImages(): void {
+	private flushStates(): void {
 		for (const [context, image] of this.desiredImages) this.setImage(context, image);
+		for (const [context, title] of this.desiredTitles) this.setTitle(context, title);
 	}
 
-	private scheduleImageFlush(): void {
-		if (this.stopped || this.imageFlushTimer) return;
-		this.imageFlushTimer = setTimeout(() => {
-			this.imageFlushTimer = undefined;
-			if (this.socket?.readyState === WebSocket.OPEN) this.flushImages();
-		}, IMAGE_FLUSH_RETRY_MS);
-		this.imageFlushTimer.unref();
+	private scheduleStateFlush(): void {
+		if (this.stopped || this.stateFlushTimer) return;
+		this.stateFlushTimer = setTimeout(() => {
+			this.stateFlushTimer = undefined;
+			if (this.socket?.readyState === WebSocket.OPEN) this.flushStates();
+		}, STATE_FLUSH_RETRY_MS);
+		this.stateFlushTimer.unref();
+	}
+
+	private retainContext(context: string): boolean {
+		if (!isValidOpenDeckContext(context)) return false;
+		if (!this.desiredContexts.has(context) && this.desiredContexts.size >= MAX_OPENDECK_LIVE_CONTEXTS) {
+			return false;
+		}
+		this.desiredContexts.add(context);
+		return true;
 	}
 
 	private scheduleReconnect(): void {

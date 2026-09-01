@@ -19,7 +19,7 @@
 			"icon": "build"
 		},
 		{
-			"name": "Deploy to OpenDeck",
+			"name": "Deploy to OpenDeck (Linux)",
 			"command": "pnpm deploy",
 			"icon": "play"
 		}

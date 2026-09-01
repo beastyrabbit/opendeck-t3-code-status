@@ -41,7 +41,7 @@ const LEGACY_AUTH_MARKERS = [
 interface SetupModule {
 	setupOpenDeck: (
 		options: { configRoot: string; dryRun: boolean },
-		dependencies: { isOpenDeckRunning: () => Promise<boolean> },
+		dependencies: { isOpenDeckRunning: () => Promise<boolean>; platform: NodeJS.Platform },
 	) => Promise<{ device: string; position: number; profile: string }>;
 }
 
@@ -143,7 +143,9 @@ async function verifyManifest(path: string, expectedVersion: string): Promise<vo
 	);
 	assert.equal(manifest.Version, expectedVersion, "manifest and package.json versions differ");
 	assert.equal(manifest.CodePath, "bin/plugin.cjs", "manifest has an unexpected default entry point");
-	assert.equal(manifest.CodePathLin, "bin/plugin.cjs", "manifest has an unexpected Linux entry point");
+	assert.equal("CodePathLin" in manifest, false, "manifest must use the portable default entry point");
+	assert.equal("CodePathMac" in manifest, false, "manifest must use the portable default entry point");
+	assert.equal("CodePathWin" in manifest, false, "manifest must use the portable default entry point");
 	assert.equal(manifest.Icon, "icons/plugin", "manifest plugin icon does not match the packaged files");
 	assert.equal(manifest.Category, "T3 Code Status", "manifest category differs from the plugin name");
 	assert.equal(
@@ -153,7 +155,15 @@ async function verifyManifest(path: string, expectedVersion: string): Promise<vo
 	);
 	assert.equal(manifest.SDKVersion, 2, "manifest has an unexpected SDK version");
 	assert.deepEqual(manifest.Software, { MinimumVersion: "6.5" }, "manifest has an unexpected host version");
-	assert.deepEqual(manifest.OS, [{ Platform: "linux" }], "manifest must declare Linux as its only platform");
+	assert.deepEqual(
+		manifest.OS,
+		[
+			{ Platform: "linux" },
+			{ MinimumVersion: "10.15", Platform: "mac" },
+			{ MinimumVersion: "10", Platform: "windows" },
+		],
+		"manifest must declare the supported OpenDeck desktop platforms",
+	);
 	assert.deepEqual(manifest.Nodejs, { Version: "20" }, "manifest must require the tested Node runtime");
 	const actions = Array.isArray(manifest.Actions) ? manifest.Actions : [];
 	assert.equal(actions.length, 1, "manifest must contain exactly one focused action");
@@ -162,21 +172,38 @@ async function verifyManifest(path: string, expectedVersion: string): Promise<vo
 	assert.deepEqual(
 		{
 			Controllers: action.Controllers,
+			DisableAutomaticStates: action.DisableAutomaticStates,
 			Icon: action.Icon,
 			Name: action.Name,
 			PropertyInspectorPath: action.PropertyInspectorPath,
 			SupportedInMultiActions: action.SupportedInMultiActions,
+			UserTitleEnabled: action.UserTitleEnabled,
 			UUID: action.UUID,
 		},
 		{
 			Controllers: ["Keypad"],
+			DisableAutomaticStates: true,
 			Icon: "icons/action",
 			Name: "Thread status",
 			PropertyInspectorPath: "property-inspector/index.html",
 			SupportedInMultiActions: false,
+			UserTitleEnabled: false,
 			UUID: ACTION_UUID,
 		},
 		"manifest thread overview action metadata differs from the packaged files",
+	);
+	assert.deepEqual(
+		action.States,
+		[
+			{
+				FontSize: 0,
+				Image: "icons/action",
+				ShowTitle: true,
+				Title: "Loading T3 Code status",
+				TitleAlignment: "middle",
+			},
+		],
+		"manifest must expose dynamic status text without drawing a second visible title",
 	);
 }
 
@@ -206,7 +233,7 @@ async function smokeTestSetup(setupRoot: string, temporaryRoot: string): Promise
 	const setup = (await import(setupUrl)) as SetupModule;
 	const result = await setup.setupOpenDeck(
 		{ configRoot, dryRun: false },
-		{ isOpenDeckRunning: async () => false },
+		{ isOpenDeckRunning: async () => false, platform: "linux" },
 	);
 	assert.deepEqual(
 		{ device: result.device, position: result.position, profile: result.profile },

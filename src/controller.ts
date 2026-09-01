@@ -4,7 +4,7 @@ import {
 	type OpenDeckConnection,
 	type OpenDeckEvent,
 } from "./opendeck.js";
-import { renderDashboard } from "./render.js";
+import { getAccessibleTitle, renderDashboard } from "./render.js";
 import { T3ClientError, type T3ClientSnapshot } from "./t3-client.js";
 import {
 	ACTION_UUID,
@@ -37,6 +37,7 @@ interface VisibleContext {
 	cycleStartedAt: number;
 	lastRenderedModel?: DashboardModel;
 	lastRenderedProgressStep?: number;
+	lastRenderedTitle?: string;
 	model: DashboardModel;
 	settings: NormalizedSettings;
 }
@@ -231,12 +232,18 @@ export class T3CodeController {
 		const duration = visible.settings.refreshSeconds * 1_000;
 		const progress = Math.min(1, Math.max(0, (now - visible.cycleStartedAt) / duration));
 		const progressStep = Math.min(RING_PROGRESS_STEPS, Math.floor(progress * RING_PROGRESS_STEPS));
-		if (visible.lastRenderedModel === visible.model && visible.lastRenderedProgressStep === progressStep) {
-			return;
+		const title = getAccessibleTitle(visible.model);
+		const imageChanged =
+			visible.lastRenderedModel !== visible.model || visible.lastRenderedProgressStep !== progressStep;
+		if (imageChanged) {
+			visible.lastRenderedModel = visible.model;
+			visible.lastRenderedProgressStep = progressStep;
+			this.host.setImage(context, renderDashboard(visible.model, progressStep / RING_PROGRESS_STEPS));
 		}
-		visible.lastRenderedModel = visible.model;
-		visible.lastRenderedProgressStep = progressStep;
-		this.host.setImage(context, renderDashboard(visible.model, progressStep / RING_PROGRESS_STEPS));
+		if (visible.lastRenderedTitle !== title) {
+			visible.lastRenderedTitle = title;
+			this.host.setTitle(context, title);
+		}
 	}
 
 	private renderAll(now = this.now()): void {

@@ -9,3 +9,8 @@ All notable changes to T3 Code Status are recorded here.
 - Add a 60-second refresh ring, manual refresh, and a 5-to-300-second interval setting.
 - Bound LevelDB, OpenDeck event, Property Inspector, and setup inputs.
 - Add reproducible release archives with signed build provenance, OpenDeck hot deployment, and optional automatic key placement.
+- Let OpenDeck install the normal plugin package on Linux, macOS, and Windows. CI runs checks on all three; automatic profile setup and hot deployment remain Linux-only.
+- Read Chromium's external IndexedDB value blobs, including the format used by current T3 Code builds on macOS.
+- Handle the different device IDs that Node reports for the same open cache file on Windows.
+- Reject non-regular runtime, settings, OpenDeck setup, database, and blob files without blocking.
+- Expose the live key status to assistive technology without drawing a second title. The Linux setup migrates existing keys while preserving their position and settings.

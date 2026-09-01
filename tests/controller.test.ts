@@ -28,11 +28,17 @@ interface SettingsCall {
 	settings: object;
 }
 
+interface TitleCall {
+	context: string;
+	title: string;
+}
+
 class FakeHost implements OpenDeckConnection {
 	readonly forgotten: string[] = [];
 	readonly images: ImageCall[] = [];
 	readonly inspectorMessages: InspectorCall[] = [];
 	readonly settings: SettingsCall[] = [];
+	readonly titles: TitleCall[] = [];
 
 	forgetContext(context: string): void {
 		this.forgotten.push(context);
@@ -48,6 +54,10 @@ class FakeHost implements OpenDeckConnection {
 
 	setSettings(context: string, settings: object): void {
 		this.settings.push({ context, settings });
+	}
+
+	setTitle(context: string, title: string): void {
+		this.titles.push({ context, title });
 	}
 }
 
@@ -154,6 +164,7 @@ test("willAppear renders loading immediately and then the fetched summary", asyn
 
 	assert.equal(client.getSummaryCalls, 1);
 	assert.equal(host.images.length, 1);
+	assert.deepEqual(host.titles, [{ context: "key-a", title: "Loading T3 Code status" }]);
 	assert.match(latestSvg(host, "key-a"), />···<\/text>/);
 	assert.match(latestSvg(host, "key-a"), />LOADING<\/text>/);
 
@@ -161,6 +172,7 @@ test("willAppear renders loading immediately and then the fetched summary", asyn
 	await flushMicrotasks();
 
 	assert.equal(host.images.length, 2);
+	assert.deepEqual(host.titles.at(-1), { context: "key-a", title: "4 of 6 working, 2 waiting" });
 	assert.match(latestSvg(host, "key-a"), />4\/6<\/text>/);
 	assert.match(latestSvg(host, "key-a"), />2 WAITING<\/text>/);
 });
@@ -377,6 +389,7 @@ test("the timer ring is quantized and skips identical image renders", async (con
 	);
 	await flushMicrotasks();
 	assert.equal(host.images.length, 2);
+	assert.equal(host.titles.length, 2);
 
 	now = 1_000;
 	context.mock.timers.tick(1_000);
@@ -387,23 +400,36 @@ test("the timer ring is quantized and skips identical image renders", async (con
 	now = 3_000;
 	context.mock.timers.tick(1_000);
 	assert.equal(host.images.length, 3);
+	assert.equal(host.titles.length, 2);
 	assert.match(latestSvg(host, "key-a"), /stroke-dashoffset="364\.11"/);
 });
 
 describe("client error display", () => {
-	const cases: Array<{ error: unknown; expected: RegExp; name: string }> = [
-		{ error: new T3ClientError("offline"), expected: />OFF<\/text>/, name: "offline" },
+	const cases: Array<{ error: unknown; expected: RegExp; name: string; title: string }> = [
+		{
+			error: new T3ClientError("offline"),
+			expected: />OFF<\/text>/,
+			name: "offline",
+			title: "T3 Code offline",
+		},
 		{
 			error: new T3ClientError("cache-unavailable"),
 			expected: />ERR<\/text>/,
 			name: "unavailable cache",
+			title: "T3 Code status error",
 		},
 		{
 			error: new T3ClientError("cache-read-failed"),
 			expected: />ERR<\/text>/,
 			name: "cache read failure",
+			title: "T3 Code status error",
 		},
-		{ error: new Error("unexpected"), expected: />ERR<\/text>/, name: "unknown failure" },
+		{
+			error: new Error("unexpected"),
+			expected: />ERR<\/text>/,
+			name: "unknown failure",
+			title: "T3 Code status error",
+		},
 	];
 
 	for (const testCase of cases) {
@@ -421,6 +447,7 @@ describe("client error display", () => {
 			await flushMicrotasks();
 
 			assert.match(latestSvg(host, "context-1"), testCase.expected);
+			assert.equal(host.titles.at(-1)?.title, testCase.title);
 		});
 	}
 });

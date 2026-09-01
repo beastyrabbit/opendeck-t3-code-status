@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
+import { promisify } from "node:util";
 
 import type { CachedT3Shell } from "../src/t3-cache.js";
 import { T3CacheError } from "../src/t3-cache.js";
@@ -11,6 +13,7 @@ import type { T3ThreadShell } from "../src/types.js";
 
 const NOW = Date.parse("2030-01-10T12:00:00.000Z");
 const LOCAL_ORIGIN = "http://127.0.0.1:3773";
+const run = promisify(execFile);
 
 interface TestFiles {
 	root: string;
@@ -322,6 +325,44 @@ test("bounds local runtime and settings files", async (context) => {
 		settingsFile: files.settingsFile,
 	});
 	await assert.rejects(oversizedSettings.getSummary(), expectClientError("invalid-response"));
+});
+
+test("rejects runtime and settings FIFOs without blocking", {
+	skip: process.platform !== "linux",
+}, async (context) => {
+	const clientUrl = new URL("../src/t3-client.ts", import.meta.url).href;
+	for (const fifo of ["runtime", "settings"] as const) {
+		const files = await testFiles(context);
+		if (fifo === "runtime") {
+			await run("mkfifo", [files.runtimeFile]);
+		} else {
+			await writeRuntime(files.runtimeFile);
+			await run("mkfifo", [files.settingsFile]);
+		}
+		const script = `
+				const { T3Client, T3ClientError } = await import(${JSON.stringify(clientUrl)});
+				const client = new T3Client({
+					fetchImpl: async () => new Response(JSON.stringify({ environmentId: "local" })),
+					readShellCache: async () => [],
+					runtimeFile: process.env.T3_TEST_RUNTIME_FILE,
+					settingsFile: process.env.T3_TEST_SETTINGS_FILE,
+				});
+				try {
+					await client.getSummary();
+					process.exitCode = 2;
+				} catch (error) {
+					if (!(error instanceof T3ClientError) || error.code !== "invalid-response") process.exitCode = 3;
+				}
+			`;
+		await run(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
+			env: {
+				...process.env,
+				T3_TEST_RUNTIME_FILE: files.runtimeFile,
+				T3_TEST_SETTINGS_FILE: files.settingsFile,
+			},
+			timeout: 5_000,
+		});
+	}
 });
 
 test("bounds the loopback environment response with and without Content-Length", async (context) => {

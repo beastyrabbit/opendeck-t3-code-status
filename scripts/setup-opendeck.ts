@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { Dirent, Stats } from "node:fs";
+import { type BigIntStats, type Dirent, constants as fileConstants, type Stats } from "node:fs";
 import {
 	chmod,
 	cp,
+	type FileHandle,
 	lstat,
 	open,
 	readdir,
@@ -34,6 +35,7 @@ export interface SetupOptions {
 
 export interface SetupDependencies {
 	isOpenDeckRunning: () => Promise<boolean>;
+	platform: NodeJS.Platform;
 }
 
 export interface SetupResult {
@@ -42,19 +44,27 @@ export interface SetupResult {
 	dryRun: boolean;
 	installedBefore: boolean;
 	position: number;
+	profileChanged: boolean;
 	profile: string;
 }
 
-const defaultDependencies: SetupDependencies = { isOpenDeckRunning };
+const defaultDependencies: SetupDependencies = { isOpenDeckRunning, platform: platform() };
 export const MAX_OPENDECK_PROFILE_BYTES = 4 * 1024 * 1024;
 export const MAX_OPENDECK_SELECTOR_BYTES = 16 * 1024;
 const MAX_OPENDECK_SELECTOR_PROPERTIES = 16;
 const MAX_OPENDECK_SELECTOR_STRING_CODE_UNITS = 255;
+const READ_ONLY_FILE_FLAGS =
+	process.platform === "win32"
+		? fileConstants.O_RDONLY
+		: fileConstants.O_RDONLY | fileConstants.O_NONBLOCK | fileConstants.O_NOFOLLOW;
 
 export async function setupOpenDeck(
 	options: SetupOptions,
 	dependencies: SetupDependencies = defaultDependencies,
 ): Promise<SetupResult> {
+	if (dependencies.platform !== "linux") {
+		throw new Error("Automatic OpenDeck profile setup is currently supported on Linux only.");
+	}
 	const requestedConfigRoot = options.configRoot ?? defaultOpenDeckConfigRoot();
 	const configRoot = await realpath(requestedConfigRoot);
 	const profilesRoot = resolve(configRoot, "profiles");
@@ -78,7 +88,7 @@ export async function setupOpenDeck(
 	);
 	const initialProfile = parseOpenDeckProfile(initialRawProfile, profilePath);
 	const initialPlacement = placeOverview(initialProfile);
-	if (!initialPlacement.alreadyPresent) prepareProfileWrite(initialProfile, profilePath);
+	if (initialPlacement.profileChanged) prepareProfileWrite(initialProfile, profilePath);
 	const pluginPath = resolve(configRoot, "plugins", PLUGIN_DIRECTORY);
 	const installedBefore = await fileExists(resolve(pluginPath, "manifest.json"));
 
@@ -89,6 +99,7 @@ export async function setupOpenDeck(
 			dryRun: true,
 			installedBefore,
 			position: initialPlacement.position,
+			profileChanged: initialPlacement.profileChanged,
 			profile: profileName,
 		};
 	}
@@ -106,9 +117,9 @@ export async function setupOpenDeck(
 	);
 	const currentProfile = parseOpenDeckProfile(currentRawProfile, profilePath);
 	const placement = placeOverview(currentProfile);
-	const updatedRawProfile = placement.alreadyPresent
-		? undefined
-		: prepareProfileWrite(currentProfile, profilePath);
+	const updatedRawProfile = placement.profileChanged
+		? prepareProfileWrite(currentProfile, profilePath)
+		: undefined;
 	await installPlugin(pluginSource, pluginPath);
 	if (updatedRawProfile !== undefined) {
 		if (await dependencies.isOpenDeckRunning()) {
@@ -136,6 +147,7 @@ export async function setupOpenDeck(
 		dryRun: false,
 		installedBefore,
 		position: placement.position,
+		profileChanged: placement.profileChanged,
 		profile: profileName,
 	};
 }
@@ -176,8 +188,16 @@ export function defaultOpenDeckConfigRoot(
 	environment: NodeJS.ProcessEnv = process.env,
 	userHome = homedir(),
 ): string {
+	if (currentPlatform === "win32") {
+		const appData = environment.APPDATA?.trim();
+		const configHome = appData && isAbsolute(appData) ? appData : resolve(userHome, "AppData", "Roaming");
+		return resolve(configHome, "opendeck");
+	}
+	if (currentPlatform === "darwin") {
+		return resolve(userHome, "Library", "Application Support", "opendeck");
+	}
 	if (currentPlatform === "linux") {
-		const xdgConfigHome = environment.XDG_CONFIG_HOME;
+		const xdgConfigHome = environment.XDG_CONFIG_HOME?.trim();
 		const configHome =
 			xdgConfigHome && isAbsolute(xdgConfigHome) ? xdgConfigHome : resolve(userHome, ".config");
 		return resolve(configHome, "opendeck");
@@ -292,10 +312,8 @@ function isSelectorScalar(value: unknown): boolean {
 class FileSizeLimitError extends Error {}
 
 async function readBoundedTextFile(path: string, maxBytes: number, label: string): Promise<string> {
-	const handle = await open(path, "r");
+	const { handle, metadata } = await openStableRegularFile(path, label);
 	try {
-		const metadata = await handle.stat({ bigint: true });
-		if (!metadata.isFile()) throw new Error(`${label} must be a real file: ${path}`);
 		if (metadata.size > BigInt(maxBytes)) {
 			throw new FileSizeLimitError(`${label} exceeds the ${formatByteLimit(maxBytes)}: ${path}`);
 		}
@@ -312,10 +330,54 @@ async function readBoundedTextFile(path: string, maxBytes: number, label: string
 		if ((await handle.read(extra, 0, 1, size)).bytesRead !== 0) {
 			throw new FileSizeLimitError(`${label} exceeds the ${formatByteLimit(maxBytes)}: ${path}`);
 		}
+		await assertFileUnchanged(handle, metadata, path, label);
 		return contents.toString("utf8");
 	} finally {
 		await handle.close();
 	}
+}
+
+async function openStableRegularFile(
+	path: string,
+	label: string,
+): Promise<{ handle: FileHandle; metadata: BigIntStats }> {
+	const before = await lstat(path, { bigint: true });
+	if (!before.isFile()) throw new Error(`${label} must be a real file: ${path}`);
+	const handle = await open(path, READ_ONLY_FILE_FLAGS);
+	try {
+		const opened = await handle.stat({ bigint: true });
+		if (!opened.isFile() || !sameFileIdentity(before, opened)) {
+			throw new Error(`${label} changed while setup was opening it: ${path}`);
+		}
+		return { handle, metadata: opened };
+	} catch (error) {
+		await handle.close();
+		throw error;
+	}
+}
+
+async function assertFileUnchanged(
+	handle: FileHandle,
+	before: BigIntStats,
+	path: string,
+	label: string,
+): Promise<void> {
+	const after = await handle.stat({ bigint: true });
+	if (
+		!after.isFile() ||
+		!sameFileIdentity(before, after) ||
+		after.size !== before.size ||
+		after.mtimeNs !== before.mtimeNs ||
+		after.ctimeNs !== before.ctimeNs
+	) {
+		throw new Error(`${label} changed while setup was reading it: ${path}`);
+	}
+}
+
+function sameFileIdentity(left: BigIntStats, right: BigIntStats): boolean {
+	if (left.ino !== right.ino) return false;
+	if (process.platform === "win32") return left.ino !== 0n;
+	return left.dev === right.dev;
 }
 
 function formatByteLimit(bytes: number): string {
@@ -384,9 +446,16 @@ function report(result: SetupResult): void {
 	console.log(`${result.dryRun ? "Would configure" : "Configured"} OpenDeck device ${result.device}:`);
 	console.log(`- plugin: ${result.installedBefore ? "updated" : "installed"}`);
 	console.log(`- profile: ${result.profile}`);
-	console.log(
-		`- overview: key ${result.position + 1}${result.alreadyPresent ? " (already present)" : " (added)"}`,
-	);
+	const overviewResult = !result.alreadyPresent
+		? result.dryRun
+			? "would be added"
+			: "added"
+		: result.profileChanged
+			? result.dryRun
+				? "accessibility settings would be updated"
+				: "accessibility settings updated"
+			: "already present";
+	console.log(`- overview: key ${result.position + 1} (${overviewResult})`);
 	if (!result.dryRun) console.log("Start OpenDeck again so it loads the plugin and profile change.");
 }
 

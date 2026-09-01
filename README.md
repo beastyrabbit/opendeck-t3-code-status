@@ -14,16 +14,17 @@ The plugin needs Node.js 20 or newer installed on the host system. OpenDeck star
 
 The first cache read starts immediately. Further reads run every 60 seconds by default.
 
-The following combination is currently supported and tested:
+The normal plugin package declares these OpenDeck platforms:
 
-| Component | Version |
+| Operating system | Minimum version |
 | --- | --- |
-| Operating system | Linux |
-| OpenDeck | 2.14.0 |
-| T3 Code | Alpha 0.0.36 |
-| Node.js | 20 or newer |
+| Linux | OpenDeck's supported distributions |
+| macOS | 10.15 |
+| Windows | 10 |
 
-OpenDeck and T3 Code must run as the same Linux user and use the same home directory. For a Flatpak installation of OpenDeck, Node.js must be installed outside Flatpak and available on the system `PATH`. A Node.js Flatpak is not enough. Other OpenDeck and T3 Code versions, as well as Flatpak installations, have not been tested yet.
+Linux is the only platform tested end to end with OpenDeck so far. That test used OpenDeck 2.14.0, T3 Code Alpha 0.0.36, and a physical Stream Deck. The same bundled T3 client and cache reader also connected successfully to live T3 Code Alpha 0.0.36 data on Windows 11 and macOS 26 on Apple silicon. OpenDeck was not installed on either probe machine, so those checks do not cover its plugin process, WebSocket connection, Property Inspector, key rendering, installation, or restart behavior.
+
+OpenDeck and T3 Code must run as the same desktop user so the plugin can see that user's T3 runtime and cache. For a Flatpak installation of OpenDeck on Linux, Node.js must be installed outside Flatpak and available on the system `PATH`. A Node.js Flatpak is not enough. Flatpak has not been tested yet.
 
 ## What the key shows
 
@@ -34,11 +35,13 @@ OpenDeck and T3 Code must run as the same Linux user and use the same home direc
 
 Intermediate values move from red through yellow to green. The plugin counts open top-level threads from every environment in T3 Code's local cache. Child agents, archived threads, and settled threads do not count. Snoozed threads normally do not count; they reappear when they request approval or input, or when a fresh failure or completed turn after the snooze needs attention, provided they are otherwise still open. T3's `Starting` and `Working` states count as work. `Monitoring` counts as waiting.
 
+OpenDeck also exposes the same changing status as the key's accessible label.
+
 The Property Inspector accepts refresh intervals from 5 to 300 seconds. Its default is 60 seconds.
 
-## Optional automatic key placement
+## Optional automatic key placement on Linux
 
-Installing the normal plugin package does not change an OpenDeck profile. The release also contains an optional setup archive for users who want the plugin installed and the key placed automatically. This setup needs Node.js 20 or newer.
+Installing the normal plugin package does not change an OpenDeck profile. The release also contains an optional Linux-only setup archive for users who want the plugin installed and the key placed automatically. This setup needs Node.js 20 or newer. On Windows and macOS, install the normal package and place the key in OpenDeck yourself.
 
 1. Extract `com.beastyrabbit.t3-code-status-opendeck-setup.tar.gz`.
 2. Quit OpenDeck completely.
@@ -48,9 +51,11 @@ Installing the normal plugin package does not change an OpenDeck profile. The re
 /usr/bin/node setup-opendeck.mjs
 ```
 
-The setup installs the plugin and puts `Thread status` on the first free key in the `Default` profile. It backs up the profile before changing it and preserves the profile's file permissions. If the action already exists, its position and refresh interval remain unchanged.
+The setup installs the plugin and puts `Thread status` on the first free key in the `Default` profile. It backs up the profile before changing it and preserves the profile's file permissions. If the action already exists, the setup keeps its position and refresh interval and updates its accessibility settings when needed.
 
-On Linux, the setup uses `$XDG_CONFIG_HOME/opendeck` when `XDG_CONFIG_HOME` is an absolute path. Otherwise it uses `~/.config/opendeck`. Pass a different location explicitly when needed:
+Keys created by an earlier version retain OpenDeck's old hidden-title setting when only the normal plugin package is upgraded. On Linux, quit OpenDeck and rerun the setup once to migrate an existing key. On Windows and macOS, remove the old key and add `Thread status` again. The visible key image works without this step, but OpenDeck cannot include its changing status in the accessible label until the profile setting is updated.
+
+The setup uses `$XDG_CONFIG_HOME/opendeck` when `XDG_CONFIG_HOME` is an absolute path. Otherwise it uses `~/.config/opendeck`. Pass a different location explicitly when needed:
 
 ```bash
 /usr/bin/node setup-opendeck.mjs --config /path/to/opendeck
@@ -60,10 +65,32 @@ For systems with multiple devices or profiles, use `--device <id>` and `--profil
 
 ## Verify a release download
 
-Download both archives and `SHA256SUMS` from the same immutable GitHub release. Check the files before installing them:
+Download both archives and `SHA256SUMS` from the same immutable GitHub release. On Linux, check the files with:
 
 ```bash
 sha256sum --check SHA256SUMS
+```
+
+macOS includes the equivalent command:
+
+```bash
+shasum -a 256 -c SHA256SUMS
+```
+
+On Windows, run this in PowerShell from the download directory:
+
+```powershell
+Get-Content .\SHA256SUMS | ForEach-Object {
+  $expected, $file = $_ -split '\s+', 2
+  if ((Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash -ne $expected) {
+    throw "Checksum mismatch: $file"
+  }
+}
+```
+
+GitHub CLI can then verify the signed build provenance on any platform:
+
+```bash
 gh attestation verify com.beastyrabbit.t3-code-status.streamDeckPlugin \
   --repo beastyrabbit/opendeck-t3-code-status \
   --signer-workflow beastyrabbit/opendeck-t3-code-status/.github/workflows/release.yml
@@ -77,15 +104,15 @@ T3 Code stores a compact shell snapshot for every connected environment in its l
 
 The plugin discovers the current `t3code` user-data directory as well as the legacy `T3 Code`, `T3 Code (Alpha)`, `T3 Code (Beta)`, and other `T3 Code (<channel>)` directories. If T3 Code uses a custom Electron data directory, set `T3CODE_CACHE_DIR` to the exact `IndexedDB/t3code_app_0.indexeddb.leveldb` directory.
 
-The plugin does not interpret message, title, or prompt records. Chromium stores several object stores in the same LevelDB files, so the reader briefly holds bounded file data in memory before it filters out every non-shell record. It does not retain, log, or transmit those contents, and it does not copy thread IDs into its own files or logs. If T3 Code is not running or has not created a cache yet, the key shows `OFF` or `ERR`, and the Property Inspector explains the state.
+The plugin does not interpret message, title, or prompt records. Chromium stores several object stores in the same LevelDB files, so the reader briefly holds bounded file data in memory before it filters out every non-shell record. Large shell snapshots may live in Chromium's matching external blob store; the reader resolves only the blob metadata for the exact shell key. It does not retain, log, or transmit cache contents, and it does not copy thread IDs into its own files or logs. If T3 Code is not running or has not created a cache yet, the key shows `OFF` or `ERR`, and the Property Inspector explains the state.
 
-To keep malformed cache data from exhausting the OpenDeck plugin process, the reader limits files, profiles, records, table blocks, decompressed blocks, shell keys, serialized snapshots, and estimated parser allocations. A single LevelDB file may not exceed 64 MB. The key shows `ERR` when a limit is exceeded.
+To keep malformed cache data from exhausting the OpenDeck plugin process, the reader limits files, profiles, records, table blocks, decompressed blocks, external blobs, shell keys, serialized snapshots, and estimated parser allocations. A single LevelDB file may not exceed 64 MB, and a shell snapshot or external blob may not exceed 8 MB. The key shows `ERR` when a limit is exceeded.
 
 Pull requests are one known limitation. T3 Code keeps a pull request's open, closed, or merged state in its live renderer but does not include it in the local shell snapshot. This plugin therefore uses only the settlement state available in the cache. A thread whose automatic settlement depends only on a pull request may remain in the denominator for a while. The plugin deliberately does not request GitHub or T3 credentials to close that gap.
 
 ## Build from source
 
-Development requires Node.js 22.13 or newer, pnpm 11, `zip`, `unzip`, and GNU `tar`. The packaged plugin runs on Node.js 20 or newer.
+Development checks require Node.js 22.13 or newer and pnpm 11. Release packaging also needs `zip`, `unzip`, and GNU `tar`, and currently runs on Linux. The packaged plugin runs on Node.js 20 or newer.
 
 In T3 Code, open the Actions menu and import the checked-in entries under `From t3.json`. They cover worktree setup, verification, builds, and local OpenDeck deployment.
 
@@ -102,15 +129,15 @@ pnpm package
 
 The package check builds each archive twice and fails unless both copies are byte-for-byte identical. It also verifies the manifest, version, required files, archive contents, bundled dependency notices, and the isolated setup path. It rejects markers from the discarded pairing implementation and never touches the real OpenDeck configuration.
 
-For a local development update, OpenDeck may remain open:
+For a local Linux development update, OpenDeck may remain open:
 
 ```bash
 pnpm deploy
 ```
 
-`deploy` replaces only this plugin and asks OpenDeck to hot-reload it. It does not edit profiles. For the first automatic placement, quit OpenDeck and run `pnpm setup:opendeck` instead.
+`deploy` replaces only this plugin and asks OpenDeck to hot-reload it. It does not edit profiles. Both `deploy` and `setup:opendeck` are Linux-only. For the first automatic placement, quit OpenDeck and run `pnpm setup:opendeck` instead.
 
-Elgato's validator does not recognize Linux plugin fields and reports `CodePathLin` and `OS: linux` as errors. OpenDeck requires those fields. Packaging bypasses only that incompatible validator step, then verifies the complete archive itself.
+Elgato's validator does not recognize OpenDeck's `OS: linux` manifest entry. Packaging bypasses only that incompatible validator step, then verifies the complete archive itself.
 
 ## AI-assisted development
 

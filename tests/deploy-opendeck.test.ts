@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { type TestContext, test } from "node:test";
 
@@ -39,7 +39,7 @@ test("parseDeployArguments supports dry-run and path overrides", () => {
 	assert.throws(() => parseDeployArguments(["--config"]), /Missing value/);
 });
 
-test("parseDeployArguments honors only an absolute XDG_CONFIG_HOME", () => {
+test("parseDeployArguments honors only an absolute XDG_CONFIG_HOME", { skip: platform() !== "linux" }, () => {
 	assert.equal(
 		parseDeployArguments([], { XDG_CONFIG_HOME: "/tmp/custom-config" }, "/home/tester").configRoot,
 		"/tmp/custom-config/opendeck",
@@ -48,6 +48,32 @@ test("parseDeployArguments honors only an absolute XDG_CONFIG_HOME", () => {
 		parseDeployArguments([], { XDG_CONFIG_HOME: "relative/config" }, "/home/tester").configRoot,
 		"/home/tester/.config/opendeck",
 	);
+});
+
+test("deploy rejects non-Linux hosts before validation or installation", async (context) => {
+	const input = await options(context);
+	const calls: string[] = [];
+	await assert.rejects(
+		deployOpenDeck(input, {
+			findOpenDeckProcesses: async () => {
+				calls.push("find-opendeck");
+				return [];
+			},
+			findRegisteredPluginPids: async () => [],
+			install: async () => {
+				calls.push("install");
+			},
+			platform: "win32",
+			reload: async () => undefined,
+			validate: async () => {
+				calls.push("validate");
+			},
+			waitForReload: async () => 0,
+			waitForStop: async () => undefined,
+		}),
+		/OpenDeck hot deployment is currently supported on Linux only/,
+	);
+	assert.deepEqual(calls, []);
 });
 
 test("dry-run validates and reports a running OpenDeck without changing it", async (context) => {

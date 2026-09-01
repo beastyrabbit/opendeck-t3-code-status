@@ -1,4 +1,5 @@
-import { open } from "node:fs/promises";
+import { type BigIntStats, constants as fileConstants } from "node:fs";
+import { type FileHandle, lstat, open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
@@ -7,6 +8,7 @@ import {
 	type CachedT3Shell,
 	type ReadT3ShellCacheOptions,
 	readT3ShellCache,
+	sameFileIdentity,
 	T3CacheError,
 } from "./t3-cache.js";
 import type { ConnectionStatus, T3ShellSnapshot, ThreadSummary } from "./types.js";
@@ -18,6 +20,10 @@ const REQUEST_TIMEOUT_MS = 5_000;
 const MAX_RUNTIME_FILE_BYTES = 16 * 1024;
 const MAX_SETTINGS_FILE_BYTES = 1024 * 1024;
 const MAX_ENVIRONMENT_RESPONSE_BYTES = 64 * 1024;
+const READ_ONLY_FILE_FLAGS =
+	process.platform === "win32"
+		? fileConstants.O_RDONLY
+		: fileConstants.O_RDONLY | fileConstants.O_NONBLOCK | fileConstants.O_NOFOLLOW;
 
 export type T3ClientErrorCode =
 	| "offline"
@@ -204,10 +210,9 @@ export class T3Client {
 }
 
 async function readBoundedTextFile(path: string, maxBytes: number): Promise<string> {
-	const handle = await open(path, "r");
+	const { handle, metadata } = await openStableRegularFile(path);
 	try {
-		const metadata = await handle.stat({ bigint: true });
-		if (!metadata.isFile() || metadata.size > BigInt(maxBytes)) throw new Error("invalid-response");
+		if (metadata.size > BigInt(maxBytes)) throw new Error("invalid-response");
 		const size = Number(metadata.size);
 		const contents = Buffer.allocUnsafe(size);
 		let offset = 0;
@@ -218,9 +223,37 @@ async function readBoundedTextFile(path: string, maxBytes: number): Promise<stri
 		}
 		const extra = Buffer.allocUnsafe(1);
 		if ((await handle.read(extra, 0, 1, size)).bytesRead !== 0) throw new Error("invalid-response");
+		await assertFileUnchanged(handle, metadata);
 		return contents.toString("utf8");
 	} finally {
 		await handle.close();
+	}
+}
+
+async function openStableRegularFile(path: string): Promise<{ handle: FileHandle; metadata: BigIntStats }> {
+	const before = await lstat(path, { bigint: true });
+	if (!before.isFile()) throw new Error("invalid-response");
+	const handle = await open(path, READ_ONLY_FILE_FLAGS);
+	try {
+		const opened = await handle.stat({ bigint: true });
+		if (!opened.isFile() || !sameFileIdentity(before, opened)) throw new Error("invalid-response");
+		return { handle, metadata: opened };
+	} catch (error) {
+		await handle.close();
+		throw error;
+	}
+}
+
+async function assertFileUnchanged(handle: FileHandle, before: BigIntStats): Promise<void> {
+	const after = await handle.stat({ bigint: true });
+	if (
+		!after.isFile() ||
+		!sameFileIdentity(before, after) ||
+		after.size !== before.size ||
+		after.mtimeNs !== before.mtimeNs ||
+		after.ctimeNs !== before.ctimeNs
+	) {
+		throw new Error("invalid-response");
 	}
 }
 

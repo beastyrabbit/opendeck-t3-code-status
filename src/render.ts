@@ -38,6 +38,25 @@ export function getDisplay(model: DashboardModel): Display {
 	return { accent: COLORS.red, count: "ERR", footer: "STATUS ERROR", label: "T3 CODE" };
 }
 
+export function getAccessibleTitle(model: DashboardModel): string {
+	if (model.kind === "loading") return "Loading T3 Code status";
+	if (model.kind === "offline") return "T3 Code offline";
+	if (model.kind === "error") return "T3 Code status error";
+
+	const { summary } = model;
+	if (summary.total === 0) return "No open T3 Code threads";
+	const working = `${summary.running} of ${summary.total} working`;
+	if (summary.failed > 0) {
+		return `${working}, ${summary.failed} ${summary.failed === 1 ? "error" : "errors"}`;
+	}
+	const directAttention = summary.approval + summary.input + summary.plan;
+	if (directAttention > 0) {
+		return `${working}, ${directAttention} ${directAttention === 1 ? "needs" : "need"} your attention`;
+	}
+	if (summary.attention > 0) return `${working}, ${summary.attention} waiting`;
+	return `${summary.running} of ${summary.total} ${summary.total === 1 ? "thread" : "threads"} working`;
+}
+
 function readyDisplay(summary: ThreadSummary): Display {
 	const accent = runningAccent(summary.running, summary.total);
 	const count = `${summary.running}/${summary.total}`;
