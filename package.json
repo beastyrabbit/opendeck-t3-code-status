@@ -1,0 +1,52 @@
+{
+	"name": "opendeck-t3-code-status",
+	"version": "0.2.0",
+	"description": "OpenDeck key for the live state of T3 Code threads",
+	"private": true,
+	"homepage": "https://github.com/beastyrabbit/opendeck-t3-code-status",
+	"bugs": {
+		"url": "https://github.com/beastyrabbit/opendeck-t3-code-status/issues"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/beastyrabbit/opendeck-t3-code-status"
+	},
+	"scripts": {
+		"build": "tsx scripts/build.ts",
+		"check": "tsc --noEmit",
+		"deploy": "pnpm build && tsx scripts/deploy-opendeck.ts",
+		"format": "biome format --write .",
+		"lint": "biome check .",
+		"package": "tsx scripts/package.ts",
+		"package:verify": "tsx scripts/verify-release.ts",
+		"setup:opendeck": "pnpm build && tsx scripts/setup-opendeck.ts",
+		"test": "tsx --test tests/**/*.test.ts",
+		"verify": "pnpm check && pnpm lint && pnpm test && pnpm build"
+	},
+	"keywords": [
+		"opendeck",
+		"stream-deck",
+		"t3-code"
+	],
+	"author": "BeastyRabbit",
+	"license": "MIT",
+	"engines": {
+		"node": ">=22.13"
+	},
+	"packageManager": "pnpm@11.24.0",
+	"type": "module",
+	"dependencies": {
+		"snappyjs": "^0.7.0",
+		"ws": "^8.21.3"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.11",
+		"@elgato/cli": "^1.9.0",
+		"@types/node": "^20.19.43",
+		"@types/ws": "^8.18.1",
+		"esbuild": "^0.28.2",
+		"lefthook": "^2.1.12",
+		"tsx": "^4.23.13",
+		"typescript": "^7.0.2"
+	}
+}

@@ -1,0 +1,27 @@
+{
+	"$schema": "https://t3.codes/schema/t3.json",
+	"iconPath": "plugin/icons/plugin.svg",
+	"scripts": [
+		{
+			"name": "Install dependencies",
+			"command": "pnpm install --frozen-lockfile",
+			"icon": "configure",
+			"runOnWorktreeCreate": true
+		},
+		{
+			"name": "Verify",
+			"command": "pnpm verify",
+			"icon": "test"
+		},
+		{
+			"name": "Build",
+			"command": "pnpm build",
+			"icon": "build"
+		},
+		{
+			"name": "Deploy to OpenDeck",
+			"command": "pnpm deploy",
+			"icon": "play"
+		}
+	]
+}

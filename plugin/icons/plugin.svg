@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+	<title id="title">T3 Code Status</title>
+	<defs>
+		<linearGradient id="face" x1="42" y1="28" x2="216" y2="230" gradientUnits="userSpaceOnUse">
+			<stop stop-color="#1d2a31" />
+			<stop offset="1" stop-color="#0d1418" />
+		</linearGradient>
+		<filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+			<feGaussianBlur stdDeviation="4" result="blur" />
+			<feMerge>
+				<feMergeNode in="blur" />
+				<feMergeNode in="SourceGraphic" />
+			</feMerge>
+		</filter>
+	</defs>
+	<rect x="8" y="8" width="240" height="240" rx="52" fill="url(#face)" stroke="#42535b" stroke-width="6" />
+	<circle cx="128" cy="128" r="82" fill="#0b1216" stroke="#26353c" stroke-width="10" />
+	<circle cx="128" cy="128" r="82" fill="none" stroke="#39d6e6" stroke-width="10" stroke-linecap="round" stroke-dasharray="323 193" transform="rotate(-90 128 128)" filter="url(#glow)" />
+	<circle cx="128" cy="128" r="82" fill="none" stroke="#ffb64a" stroke-width="10" stroke-linecap="round" stroke-dasharray="102 414" stroke-dashoffset="-337" transform="rotate(-90 128 128)" />
+	<circle cx="128" cy="128" r="82" fill="none" stroke="#ff626b" stroke-width="10" stroke-linecap="round" stroke-dasharray="34 482" stroke-dashoffset="-455" transform="rotate(-90 128 128)" />
+	<path d="M88 106h80M88 128h80M88 150h80" stroke="#405159" stroke-width="7" stroke-linecap="round" />
+	<path d="M88 106h51M88 128h65M88 150h40" stroke="#39d6e6" stroke-width="7" stroke-linecap="round" />
+	<circle cx="168" cy="106" r="7" fill="#ffb64a" />
+	<circle cx="168" cy="128" r="7" fill="#39d6e6" />
+	<circle cx="168" cy="150" r="7" fill="#ff626b" />
+</svg>

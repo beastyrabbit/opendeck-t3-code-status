@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>T3 Code Status</title>
+		<link rel="icon" href="data:," />
+		<link rel="stylesheet" href="styles.css" />
+		<script src="property-inspector.js" defer></script>
+	</head>
+	<body>
+		<main class="panel">
+			<header class="instrument-header">
+				<div class="status-dial" id="status-dial" data-state="loading" aria-hidden="true">
+					<svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+						<circle class="dial-ticks" cx="24" cy="24" r="20" pathLength="48" />
+						<circle class="dial-ring" cx="24" cy="24" r="15.5" />
+						<path class="dial-hand" d="M24 24V12" />
+						<circle class="dial-pin" cx="24" cy="24" r="2.5" />
+					</svg>
+				</div>
+				<div>
+					<p class="product-mark">T3 CODE</p>
+					<h1>Thread status</h1>
+				</div>
+			</header>
+
+			<section class="status-card" aria-labelledby="connection-heading">
+				<div class="status-card__top">
+					<p class="section-label" id="connection-heading">Local T3 cache</p>
+					<span class="status-light" id="status-light" data-state="loading" aria-hidden="true"></span>
+				</div>
+				<div id="connection-announcement" role="status" aria-live="polite" aria-atomic="true">
+					<p class="connection-state" id="connection-state">Reading cache</p>
+					<p class="connection-detail" id="connection-detail">
+						Looking for T3 Code. No sign-in required.
+					</p>
+					<p class="error-message" id="error-message" hidden></p>
+				</div>
+			</section>
+
+			<section class="control-section" aria-labelledby="refresh-heading">
+				<div class="section-heading">
+					<div>
+						<p class="section-label" id="refresh-heading">Refresh interval</p>
+						<p class="section-copy">The ring on the key runs until the next cache read.</p>
+					</div>
+					<span class="section-code">TIMER</span>
+				</div>
+				<label class="number-control" for="refresh-seconds">
+					<input
+						id="refresh-seconds"
+						type="number"
+						min="5"
+						max="300"
+						step="1"
+							inputmode="numeric"
+							value="60"
+							disabled
+							aria-label="Refresh interval in seconds"
+						aria-describedby="refresh-note"
+					/>
+					<span>seconds</span>
+				</label>
+				<p class="field-note" id="refresh-note" aria-live="polite">
+					Choose 5 to 300 seconds. Press the key to refresh immediately.
+				</p>
+			</section>
+		</main>
+	</body>
+</html>

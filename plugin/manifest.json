@@ -1,0 +1,45 @@
+{
+	"Name": "T3 Code Status",
+	"Description": "Shows how many open T3 Code threads are currently working across all connected environments.",
+	"Author": "BeastyRabbit",
+	"Version": "0.2.0.0",
+	"UUID": "com.beastyrabbit.t3-code-status",
+	"URL": "https://github.com/beastyrabbit/opendeck-t3-code-status",
+	"CodePath": "bin/plugin.cjs",
+	"CodePathLin": "bin/plugin.cjs",
+	"Icon": "icons/plugin",
+	"Category": "T3 Code Status",
+	"CategoryIcon": "icons/category",
+	"SDKVersion": 2,
+	"Software": {
+		"MinimumVersion": "6.5"
+	},
+	"OS": [
+		{
+			"Platform": "linux"
+		}
+	],
+	"Nodejs": {
+		"Version": "20"
+	},
+	"Actions": [
+		{
+			"Name": "Thread status",
+			"UUID": "com.beastyrabbit.t3-code-status.overview",
+			"Icon": "icons/action",
+			"Tooltip": "Shows working and waiting T3 Code threads across all connected environments",
+			"Controllers": ["Keypad"],
+			"SupportedInMultiActions": false,
+			"DisableAutomaticStates": true,
+			"UserTitleEnabled": false,
+			"PropertyInspectorPath": "property-inspector/index.html",
+			"States": [
+				{
+					"Image": "icons/action",
+					"TitleAlignment": "middle",
+					"ShowTitle": false
+				}
+			]
+		}
+	]
+}

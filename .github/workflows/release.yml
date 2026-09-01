@@ -1,0 +1,153 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Record the scanned source commit
+        id: source
+        run: printf 'commit=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/setup-gitleaks
+      - name: Scan source and history for secrets
+        run: gitleaks git --no-banner --redact .
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 11.24.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.23.2
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm verify
+      - name: Check tag and package versions
+        run: |
+          node <<'NODE'
+          const { readFileSync } = require("node:fs");
+          const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
+          const manifestVersion = JSON.parse(readFileSync("plugin/manifest.json", "utf8")).Version;
+          if (process.env.GITHUB_REF_NAME !== `v${packageVersion}`) {
+            throw new Error(`Tag ${process.env.GITHUB_REF_NAME} does not match package version ${packageVersion}.`);
+          }
+          if (manifestVersion !== `${packageVersion}.0`) {
+            throw new Error(`Manifest version ${manifestVersion} does not match package version ${packageVersion}.`);
+          }
+          NODE
+      - run: pnpm package
+      - name: Scan release payloads for secrets
+        run: gitleaks dir --max-archive-depth 2 --no-banner --redact release
+      - name: Record release checksums
+        working-directory: release
+        run: >-
+          sha256sum
+          com.beastyrabbit.t3-code-status.streamDeckPlugin
+          com.beastyrabbit.t3-code-status-opendeck-setup.tar.gz
+          > SHA256SUMS
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.20.2
+      - name: Check packaged JavaScript with Node 20
+        run: |
+          node --check dist/com.beastyrabbit.t3-code-status.sdPlugin/bin/plugin.cjs
+          node --check dist/setup-opendeck.mjs
+          node --input-type=module -e 'await import("./dist/setup-opendeck.mjs")'
+      - name: Attest verified release provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            release/com.beastyrabbit.t3-code-status.streamDeckPlugin
+            release/com.beastyrabbit.t3-code-status-opendeck-setup.tar.gz
+            release/SHA256SUMS
+      - name: Store verified release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          if-no-files-found: error
+          name: release-assets
+          path: |
+            release/com.beastyrabbit.t3-code-status.streamDeckPlugin
+            release/com.beastyrabbit.t3-code-status-opendeck-setup.tar.gz
+            release/SHA256SUMS
+          retention-days: 1
+
+  release:
+    needs: build
+    permissions:
+      contents: write
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Download verified release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-assets
+          path: release
+      - name: Verify downloaded release checksums
+        working-directory: release
+        run: sha256sum --check SHA256SUMS
+      - name: Confirm the tag targets the scanned commit before drafting
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SCANNED_COMMIT: ${{ needs.build.outputs.commit }}
+        run: test "$(gh api "repos/$GH_REPO/commits/$GITHUB_REF_NAME" --jq .sha)" = "$SCANNED_COMMIT"
+      - name: Create a verified release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SCANNED_COMMIT: ${{ needs.build.outputs.commit }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          release/com.beastyrabbit.t3-code-status.streamDeckPlugin
+          release/com.beastyrabbit.t3-code-status-opendeck-setup.tar.gz
+          release/SHA256SUMS
+          --draft
+          --generate-notes
+          --notes "Verified source commit: $SCANNED_COMMIT"
+          --target "$SCANNED_COMMIT"
+          --verify-tag
+      - name: Verify the release draft and re-check its tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SCANNED_COMMIT: ${{ needs.build.outputs.commit }}
+        run: |
+          set -euo pipefail
+          matches="$(gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100" |
+            jq -c --arg tag "$GITHUB_REF_NAME" '[.[][] | select(.tag_name == $tag)]')"
+          jq -e --arg commit "$SCANNED_COMMIT" --arg tag "$GITHUB_REF_NAME" '
+            length == 1 and
+            .[0].draft == true and
+            .[0].immutable == false and
+            .[0].tag_name == $tag and
+            .[0].target_commitish == $commit
+          ' <<<"$matches" >/dev/null
+          test "$(gh api "repos/$GH_REPO/commits/$GITHUB_REF_NAME" --jq .sha)" = "$SCANNED_COMMIT"
+      - name: Record the manual publication requirement
+        env:
+          SCANNED_COMMIT: ${{ needs.build.outputs.commit }}
+        run: |
+          printf '%s\n' \
+            '## Verified release draft ready' \
+            '' \
+            "Scanned source commit: \`$SCANNED_COMMIT\`" \
+            '' \
+            'This workflow does not publish releases.' \
+            'Publishing remains a separate manual administrator action after an out-of-band preflight.' \
+            >> "$GITHUB_STEP_SUMMARY"
