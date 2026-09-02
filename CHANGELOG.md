@@ -14,3 +14,4 @@ All notable changes to T3 Code Status are recorded here.
 - Handle the different device IDs that Node reports for the same open cache file on Windows.
 - Reject non-regular runtime, settings, OpenDeck setup, database, and blob files without blocking.
 - Expose the live key status to assistive technology without drawing a second title. The Linux setup migrates existing keys while preserving their position and settings.
+- Avoid repeating unchanged Property Inspector status announcements during refreshes.

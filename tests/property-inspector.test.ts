@@ -18,7 +18,9 @@ interface FakeElement {
 	dataset: Record<string, string>;
 	disabled: boolean;
 	hidden: boolean;
+	hiddenWrites: number;
 	textContent: string;
+	textContentWrites: number;
 	value: string;
 }
 
@@ -41,15 +43,32 @@ function loadInspector() {
 		"refresh-seconds",
 		"refresh-note",
 	]) {
-		elements.set(id, {
+		let hidden = true;
+		let textContent = "";
+		const element: FakeElement = {
 			addEventListener: () => undefined,
 			classList: { toggle: () => undefined },
 			dataset: {},
 			disabled: id === "refresh-seconds",
-			hidden: true,
-			textContent: "",
+			get hidden() {
+				return hidden;
+			},
+			set hidden(value) {
+				hidden = value;
+				this.hiddenWrites += 1;
+			},
+			hiddenWrites: 0,
+			get textContent() {
+				return textContent;
+			},
+			set textContent(value) {
+				textContent = value;
+				this.textContentWrites += 1;
+			},
+			textContentWrites: 0,
 			value: id === "refresh-seconds" ? "60" : "",
-		});
+		};
+		elements.set(id, element);
 	}
 
 	const sockets: Array<{
@@ -161,6 +180,111 @@ test("connection updates use one atomic live region for status, detail, and reco
 	);
 	assert.doesNotMatch(inspectorHtml, /id="connection-state"[^>]*aria-live=/);
 	assert.doesNotMatch(inspectorHtml, /id="error-message"[^>]*role="alert"/);
+});
+
+test("unchanged connection updates do not mutate the live region again", () => {
+	const { connect, elements, socket } = loadInspector();
+	connect(
+		1234,
+		"pi-context",
+		"registerPropertyInspector",
+		"{}",
+		JSON.stringify({ context: "action-context", payload: { settings: {} } }),
+	);
+	const connection = socket();
+	assert.ok(connection);
+	connection.open();
+
+	const message = {
+		data: JSON.stringify({
+			event: "sendToPropertyInspector",
+			payload: { status: { environments: 2, state: "connected" }, type: "connectionStatus" },
+		}),
+	};
+	connection.emit("message", message);
+
+	const state = elements.get("connection-state");
+	const detail = elements.get("connection-detail");
+	const error = elements.get("error-message");
+	assert.ok(state);
+	assert.ok(detail);
+	assert.ok(error);
+	const writes = {
+		state: state.textContentWrites,
+		detail: detail.textContentWrites,
+		errorText: error.textContentWrites,
+		errorHidden: error.hiddenWrites,
+	};
+
+	connection.emit("message", message);
+
+	assert.deepEqual(
+		{
+			state: state.textContentWrites,
+			detail: detail.textContentWrites,
+			errorText: error.textContentWrites,
+			errorHidden: error.hiddenWrites,
+		},
+		writes,
+	);
+});
+
+test("visible connection changes still update the live region", () => {
+	const { connect, elements, socket } = loadInspector();
+	connect(
+		1234,
+		"pi-context",
+		"registerPropertyInspector",
+		"{}",
+		JSON.stringify({ context: "action-context", payload: { settings: {} } }),
+	);
+	const connection = socket();
+	assert.ok(connection);
+	connection.open();
+
+	const sendStatus = (payload: Record<string, unknown>) => {
+		connection.emit("message", {
+			data: JSON.stringify({ event: "sendToPropertyInspector", payload }),
+		});
+	};
+	const state = elements.get("connection-state");
+	const detail = elements.get("connection-detail");
+	const error = elements.get("error-message");
+	assert.ok(state);
+	assert.ok(detail);
+	assert.ok(error);
+
+	sendStatus({
+		status: { environments: 2, state: "connected" },
+		type: "connectionStatus",
+	});
+	const connectedWrites = state.textContentWrites + detail.textContentWrites;
+	sendStatus({
+		status: { environments: 3, state: "connected" },
+		type: "connectionStatus",
+	});
+	assert.equal(state.textContent, "Connected");
+	assert.equal(detail.textContent, "3 Environments · local cache · no sign-in");
+	assert.equal(state.textContentWrites + detail.textContentWrites, connectedWrites + 1);
+
+	sendStatus({
+		error: "cache-unavailable",
+		status: { environments: 0, state: "offline" },
+		type: "connectionStatus",
+	});
+	assert.equal(state.textContent, "Cache unavailable");
+	assert.equal(detail.textContent, "Thread status cannot update until the local cache is available.");
+	assert.equal(error.textContent, "The local T3 thread cache could not be opened.");
+	assert.equal(error.hidden, false);
+
+	sendStatus({
+		status: { environments: 3, state: "connected" },
+		type: "connectionStatus",
+	});
+	assert.equal(state.textContent, "Connected");
+	assert.equal(detail.textContent, "3 Environments · local cache · no sign-in");
+	assert.equal(error.textContent, "");
+	assert.equal(error.hidden, true);
 });
 
 test("websocket errors and normal closes disable settings without duplicate recovery updates", () => {

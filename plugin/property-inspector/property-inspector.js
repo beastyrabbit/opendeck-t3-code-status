@@ -227,25 +227,27 @@ function renderConnectionStatus(payload) {
 	}
 
 	if (payload.busy) {
-		elements.connectionState.textContent = busyLabel();
-		elements.connectionDetail.textContent = "Reading the local T3 cache.";
+		setTextContent(elements.connectionState, busyLabel());
+		setTextContent(elements.connectionDetail, "Reading the local T3 cache.");
 		return;
 	}
 	if (hasError) {
-		elements.connectionState.textContent = runtimeErrorLabel(errorCode);
-		elements.connectionDetail.textContent = runtimeErrorDetail(errorCode);
+		setTextContent(elements.connectionState, runtimeErrorLabel(errorCode));
+		setTextContent(elements.connectionDetail, runtimeErrorDetail(errorCode));
 		return;
 	}
 
 	switch (status.state) {
 		case "connected":
-			elements.connectionState.textContent = "Connected";
-			elements.connectionDetail.textContent = connectedDetail(status);
+			setTextContent(elements.connectionState, "Connected");
+			setTextContent(elements.connectionDetail, connectedDetail(status));
 			break;
 		default:
-			elements.connectionState.textContent = "T3 Code offline";
-			elements.connectionDetail.textContent =
-				"Start T3 Code. The plugin will then read its local thread cache.";
+			setTextContent(elements.connectionState, "T3 Code offline");
+			setTextContent(
+				elements.connectionDetail,
+				"Start T3 Code. The plugin will then read its local thread cache.",
+			);
 	}
 }
 
@@ -316,8 +318,8 @@ function setVisualState(state) {
 }
 
 function showLocalError(message) {
-	elements.errorMessage.textContent = message;
-	elements.errorMessage.hidden = false;
+	setTextContent(elements.errorMessage, message);
+	setHidden(elements.errorMessage, false);
 	setVisualState("error");
 }
 
@@ -325,23 +327,36 @@ function showConnectionError(message) {
 	socketReady = false;
 	setSettingsEnabled(false);
 	setBusy(false);
-	elements.connectionState.textContent = "OpenDeck disconnected";
-	elements.connectionDetail.textContent = "Close and reopen this settings panel after OpenDeck reconnects.";
+	setTextContent(elements.connectionState, "OpenDeck disconnected");
+	setTextContent(
+		elements.connectionDetail,
+		"Close and reopen this settings panel after OpenDeck reconnects.",
+	);
 	showLocalError(message);
 }
 
 function showInitializationError(message) {
 	setBusy(false);
 	setSettingsEnabled(false);
-	elements.connectionState.textContent = "Settings unavailable";
-	elements.connectionDetail.textContent =
-		"Close and reopen this settings panel. If the problem continues, restart OpenDeck.";
+	setTextContent(elements.connectionState, "Settings unavailable");
+	setTextContent(
+		elements.connectionDetail,
+		"Close and reopen this settings panel. If the problem continues, restart OpenDeck.",
+	);
 	showLocalError(message);
 }
 
 function clearError() {
-	elements.errorMessage.textContent = "";
-	elements.errorMessage.hidden = true;
+	setTextContent(elements.errorMessage, "");
+	setHidden(elements.errorMessage, true);
+}
+
+function setTextContent(element, text) {
+	if (element.textContent !== text) element.textContent = text;
+}
+
+function setHidden(element, hidden) {
+	if (element.hidden !== hidden) element.hidden = hidden;
 }
 
 window.connectElgatoStreamDeckSocket = connectElgatoStreamDeckSocket;
