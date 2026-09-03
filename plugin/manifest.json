@@ -2,7 +2,7 @@
 	"Name": "T3 Code Status",
 	"Description": "Shows how many open T3 Code threads are currently working across all connected environments.",
 	"Author": "BeastyRabbit",
-	"Version": "0.2.0.0",
+	"Version": "0.2.1.0",
 	"UUID": "com.beastyrabbit.t3-code-status",
 	"URL": "https://github.com/beastyrabbit/opendeck-t3-code-status",
 	"CodePath": "bin/plugin.cjs",

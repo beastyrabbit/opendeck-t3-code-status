@@ -138,6 +138,7 @@ function primitiveV8String(
 	encoding: "latin1" | "utf16le" | "utf8",
 	paddingBytes?: number,
 	globalOffset = 15,
+	version = 15,
 ): Buffer {
 	const tags = { latin1: 0x22, utf16le: 0x63, utf8: 0x53 } as const;
 	const encoded = Buffer.from(value, encoding);
@@ -145,7 +146,7 @@ function primitiveV8String(
 	const canonicalPadding =
 		encoding === "utf16le" && (globalOffset + 3 + encodedLength.length) % 2 !== 0 ? 1 : 0;
 	return Buffer.concat([
-		Buffer.from([0xff, 0x0f]),
+		Buffer.concat([Buffer.from([0xff]), encodeVarint(version)]),
 		Buffer.alloc(paddingBytes ?? canonicalPadding),
 		Buffer.from([tags[encoding]]),
 		encodedLength,
@@ -542,20 +543,28 @@ describe("Chromium IndexedDB primitives", () => {
 	});
 
 	test("decodes every primitive V8 string encoding with canonical alignment", () => {
-		for (const compressed of [false, true]) {
-			for (const [environmentId, encoding] of [
-				["environment-ä", "latin1"],
-				["environment-€", "utf16le"],
-				["environment-€", "utf8"],
-			] as const) {
-				const stored = decodeStoredShellValue(
-					storedSerialized(
-						primitiveV8String(shellJson(environmentId, 7, [], "2030-01-01T00:00:00.000Z"), encoding),
-						compressed,
-					),
-				);
-				assert.equal(stored.environmentId, environmentId);
-				assert.equal(stored.snapshot.snapshotSequence, 7);
+		for (const version of [15, 16]) {
+			for (const compressed of [false, true]) {
+				for (const [environmentId, encoding] of [
+					["environment-ä", "latin1"],
+					["environment-€", "utf16le"],
+					["environment-€", "utf8"],
+				] as const) {
+					const stored = decodeStoredShellValue(
+						storedSerialized(
+							primitiveV8String(
+								shellJson(environmentId, 7, [], "2030-01-01T00:00:00.000Z"),
+								encoding,
+								undefined,
+								15,
+								version,
+							),
+							compressed,
+						),
+					);
+					assert.equal(stored.environmentId, environmentId);
+					assert.equal(stored.snapshot.snapshotSequence, 7);
+				}
 			}
 		}
 	});
@@ -613,13 +622,14 @@ describe("Chromium IndexedDB primitives", () => {
 		);
 	});
 
-	test("rejects V8 string format versions other than the observed T3 format", () => {
+	test("rejects V8 string format versions outside the two observed T3 formats", () => {
 		const validJson = shellJson("environment-a", 7, [], "2030-01-01T00:00:00.000Z");
-		const serialized = primitiveV8String(validJson, "latin1");
-		for (const version of [0, 14, 16]) {
-			const withVersion = Buffer.from(serialized);
-			withVersion[1] = version;
-			assertUnsupported(() => decodeStoredShellValue(storedSerialized(withVersion)));
+		for (const version of [0, 14, 17, 128]) {
+			assertUnsupported(() =>
+				decodeStoredShellValue(
+					storedSerialized(primitiveV8String(validJson, "latin1", undefined, 15, version)),
+				),
+			);
 		}
 	});
 

@@ -2,6 +2,11 @@
 
 All notable changes to T3 Code Status are recorded here.
 
+## 0.2.1
+
+- Read T3 Code caches that use V8 serialization format 16 while retaining support for format 15.
+- Retry every five seconds while T3 Code is offline or its cache cannot be read, then return to the configured refresh interval after recovery.
+
 ## 0.2.0
 
 - Read thread state from T3 Code's local shell cache without accounts, pairing, or credentials.

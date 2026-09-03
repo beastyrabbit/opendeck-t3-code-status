@@ -376,6 +376,124 @@ test("the interval refreshes only when due, keyUp refreshes now, and disappearan
 	assert.equal(client.getSummaryCalls, 3);
 });
 
+test("offline and error states retry after five seconds then resume the configured interval", async (context) => {
+	useMockedIntervals(context);
+	let now = 0;
+	const host = new FakeHost();
+	const client = new FakeClient();
+	client.onGetSummary = async () => {
+		if (client.getSummaryCalls === 1) throw new T3ClientError("offline");
+		if (client.getSummaryCalls === 2) throw new T3ClientError("cache-read-failed");
+		return summary({ total: 7, running: 7, attention: 0, working: 7, waiting: 0 });
+	};
+	const controller = new T3CodeController(host, client, { now: () => now });
+	context.after(() => controller.dispose());
+
+	controller.handle(event("willAppear", "key-a", { settings: { refreshSeconds: 60, settingsVersion: 1 } }));
+	await flushMicrotasks();
+	assert.equal(client.getSummaryCalls, 1);
+	assert.equal(host.titles.at(-1)?.title, "T3 Code offline");
+
+	now = 4_999;
+	context.mock.timers.tick(4_999);
+	assert.equal(client.getSummaryCalls, 1);
+
+	now = 5_000;
+	context.mock.timers.tick(1);
+	await flushMicrotasks();
+	assert.equal(client.getSummaryCalls, 2);
+	assert.equal(host.titles.at(-1)?.title, "T3 Code status error");
+
+	now = 9_999;
+	context.mock.timers.tick(4_999);
+	assert.equal(client.getSummaryCalls, 2);
+
+	now = 10_000;
+	context.mock.timers.tick(1);
+	await flushMicrotasks();
+	assert.equal(client.getSummaryCalls, 3);
+	assert.equal(host.titles.at(-1)?.title, "7 of 7 threads working");
+
+	now = 69_999;
+	context.mock.timers.tick(59_999);
+	assert.equal(client.getSummaryCalls, 3);
+
+	now = 70_000;
+	context.mock.timers.tick(1);
+	await flushMicrotasks();
+	assert.equal(client.getSummaryCalls, 4);
+});
+
+test("a failed shared read starts one bounded retry window for every visible context", async (context) => {
+	useMockedIntervals(context);
+	let now = 0;
+	const host = new FakeHost();
+	const client = new FakeClient();
+	client.onGetSummary = async () => {
+		if (client.getSummaryCalls === 3) throw new T3ClientError("offline");
+		return summary();
+	};
+	const controller = new T3CodeController(host, client, { now: () => now });
+	context.after(() => controller.dispose());
+
+	controller.handle(event("willAppear", "key-a", { settings: { refreshSeconds: 60, settingsVersion: 1 } }));
+	await flushMicrotasks();
+
+	now = 30_000;
+	context.mock.timers.tick(30_000);
+	controller.handle(event("willAppear", "key-b", { settings: { refreshSeconds: 60, settingsVersion: 1 } }));
+	await flushMicrotasks();
+	assert.equal(client.getSummaryCalls, 2);
+
+	now = 60_000;
+	context.mock.timers.tick(30_000);
+	await flushMicrotasks();
+	assert.equal(client.getSummaryCalls, 3);
+
+	now = 61_000;
+	context.mock.timers.tick(1_000);
+	await flushMicrotasks();
+	assert.equal(client.getSummaryCalls, 3);
+
+	now = 65_000;
+	context.mock.timers.tick(4_000);
+	await flushMicrotasks();
+	assert.equal(client.getSummaryCalls, 4);
+});
+
+test("a forced recovery restarts the configured interval for every recovered context", async (context) => {
+	useMockedIntervals(context);
+	let now = 0;
+	const host = new FakeHost();
+	const client = new FakeClient();
+	const initial = deferred<ThreadSummary>();
+	client.onGetSummary = () => initial.promise;
+	const controller = new T3CodeController(host, client, { now: () => now });
+	context.after(() => controller.dispose());
+
+	controller.handle(event("willAppear", "key-a", { settings: { refreshSeconds: 60, settingsVersion: 1 } }));
+	controller.handle(event("willAppear", "key-b", { settings: { refreshSeconds: 5, settingsVersion: 1 } }));
+	initial.reject(new T3ClientError("offline"));
+	await flushMicrotasks();
+	assert.equal(client.getSummaryCalls, 1);
+
+	now = 4_000;
+	client.onGetSummary = async () => summary();
+	controller.handle(event("keyUp", "key-a"));
+	await flushMicrotasks();
+	assert.equal(client.getSummaryCalls, 2);
+
+	now = 5_000;
+	context.mock.timers.tick(5_000);
+	await flushMicrotasks();
+	assert.equal(client.getSummaryCalls, 2);
+
+	now = 9_000;
+	context.mock.timers.tick(4_000);
+	await flushMicrotasks();
+	assert.equal(client.getSummaryCalls, 3);
+});
+
 test("the timer ring is quantized and skips identical image renders", async (context) => {
 	useMockedIntervals(context);
 	let now = 0;

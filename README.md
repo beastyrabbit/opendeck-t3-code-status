@@ -12,7 +12,7 @@ The plugin needs Node.js 20 or newer installed on the host system. OpenDeck star
 2. Install `com.beastyrabbit.t3-code-status.streamDeckPlugin` through OpenDeck's plugin manager.
 3. Drag `Thread status` from the `T3 Code Status` category onto a free key.
 
-The first cache read starts immediately. Further reads run every 60 seconds by default.
+The first cache read starts immediately. Further reads run every 60 seconds by default. If T3 Code exits or its cache cannot be read, the key retries every five seconds until it recovers, then returns to the configured interval.
 
 The normal plugin package declares these OpenDeck platforms:
 

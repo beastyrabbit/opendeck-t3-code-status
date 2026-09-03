@@ -1,6 +1,6 @@
 {
 	"name": "opendeck-t3-code-status",
-	"version": "0.2.0",
+	"version": "0.2.1",
 	"description": "OpenDeck key for the live state of T3 Code threads",
 	"private": true,
 	"homepage": "https://github.com/beastyrabbit/opendeck-t3-code-status",

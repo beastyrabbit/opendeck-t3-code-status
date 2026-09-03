@@ -19,6 +19,7 @@ import {
 const ANIMATION_INTERVAL_MS = 1_000;
 const CONNECTION_STATUS_CACHE_MS = 1_000;
 const COMMAND_BURST_WINDOW_MS = 250;
+const ERROR_RETRY_INTERVAL_MS = 5_000;
 const LEGACY_REFRESH_SECONDS = 15;
 const RING_PROGRESS_STEPS = 20;
 
@@ -223,13 +224,19 @@ export class T3CodeController {
 	}
 
 	private isDue(visible: VisibleContext, now: number): boolean {
-		return now - visible.cycleStartedAt >= visible.settings.refreshSeconds * 1_000;
+		return now - visible.cycleStartedAt >= this.refreshIntervalMs(visible);
+	}
+
+	private refreshIntervalMs(visible: VisibleContext): number {
+		return visible.model.kind === "offline" || visible.model.kind === "error"
+			? ERROR_RETRY_INTERVAL_MS
+			: visible.settings.refreshSeconds * 1_000;
 	}
 
 	private renderContext(context: string, now = this.now()): void {
 		const visible = this.visibleContexts.get(context);
 		if (!visible) return;
-		const duration = visible.settings.refreshSeconds * 1_000;
+		const duration = this.refreshIntervalMs(visible);
 		const progress = Math.min(1, Math.max(0, (now - visible.cycleStartedAt) / duration));
 		const progressStep = Math.min(RING_PROGRESS_STEPS, Math.floor(progress * RING_PROGRESS_STEPS));
 		const title = getAccessibleTitle(visible.model);
@@ -297,9 +304,11 @@ export class T3CodeController {
 			const completedAt = this.now();
 			const completedModel = model.kind === "ready" ? { ...model, refreshedAt: completedAt } : model;
 			for (const visible of this.visibleContexts.values()) {
+				const wasRecovering = visible.model.kind === "offline" || visible.model.kind === "error";
 				visible.model = completedModel;
-				if (!targets.has(visible.context)) continue;
-				visible.cycleStartedAt = completedAt;
+				if (targets.has(visible.context) || completedModel.kind !== "ready" || wasRecovering) {
+					visible.cycleStartedAt = completedAt;
+				}
 			}
 			this.renderAll(completedAt);
 		}

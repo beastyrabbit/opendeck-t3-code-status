@@ -45,7 +45,7 @@ const V8_PADDING_TAG = 0x00;
 const V8_UTF8_STRING_TAG = 0x53;
 const V8_ONE_BYTE_STRING_TAG = 0x22;
 const V8_TWO_BYTE_STRING_TAG = 0x63;
-const SUPPORTED_V8_SERIALIZATION_VERSION = 15;
+const SUPPORTED_V8_SERIALIZATION_VERSIONS = new Set([15, 16]);
 const EXTERNAL_VALUE_MARKER = Buffer.from([0xff, 0x11, 0x01]);
 const COMPRESSED_VALUE_MARKER = Buffer.from([0xff, 0x11, 0x02]);
 const EXTERNAL_OBJECT_BLOB = 0;
@@ -868,7 +868,7 @@ function decodePrimitiveV8String(
 ): string {
 	if (serialized[0] !== V8_VERSION_TAG) return fail("corrupt");
 	const version = decodeV8Uint32Varint(serialized, 1);
-	if (version.value !== SUPPORTED_V8_SERIALIZATION_VERSION) return fail("unsupported");
+	if (!SUPPORTED_V8_SERIALIZATION_VERSIONS.has(version.value)) return fail("unsupported");
 	let offset = 1 + version.bytesRead;
 	let hasPadding = false;
 	if (serialized[offset] === V8_PADDING_TAG) {
