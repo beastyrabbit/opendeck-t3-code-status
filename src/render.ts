@@ -48,7 +48,10 @@ export function getDisplay(model: DashboardModel, mode: DisplayMode = "combined"
 		}
 		if (mode === "threads") {
 			return {
-				accent: runningAccent(model.summary.running, model.summary.total),
+				accent:
+					model.summary.total === 0
+						? COLORS.muted
+						: runningAccent(model.summary.running, model.summary.total),
 				count: `${model.summary.running}/${model.summary.total}`,
 				footer: model.summary.total === 0 ? "NO THREADS" : "WORKING",
 				label: "T3 CODE",

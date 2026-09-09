@@ -189,6 +189,8 @@ test("question alerts cover input, approvals and plans but exclude waiting and f
 });
 
 test("combined alerts retain thread counts and thread-only mode never blinks", () => {
+	const empty: DashboardModel = { kind: "ready", refreshedAt: 0, summary: summary({ total: 0, running: 0 }) };
+	assert.equal(getDisplay(empty, "threads").accent, "#6F858E");
 	const model: DashboardModel = {
 		kind: "ready",
 		refreshedAt: 0,
