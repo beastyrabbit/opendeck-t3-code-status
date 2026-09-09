@@ -1,7 +1,4 @@
 const ACTION_UUID = "com.beastyrabbit.t3-code-status.overview";
-const DEFAULT_REFRESH_SECONDS = 60;
-const MIN_REFRESH_SECONDS = 5;
-const MAX_REFRESH_SECONDS = 300;
 const SETTINGS_VERSION = 1;
 const MAX_ACTION_INFO_CODE_UNITS = 64 * 1024;
 const MAX_MESSAGE_CODE_UNITS = 64 * 1024;
@@ -17,6 +14,8 @@ let protocolFailed = false;
 let connectionErrorShown = false;
 let messageWindowStartedAt = 0;
 let messagesInWindow = 0;
+let authBusy = false;
+let connections = [];
 
 const elements = {};
 
@@ -93,50 +92,86 @@ function cacheElements() {
 	elements.connectionState = document.getElementById("connection-state");
 	elements.connectionDetail = document.getElementById("connection-detail");
 	elements.errorMessage = document.getElementById("error-message");
-	elements.refreshInput = document.getElementById("refresh-seconds");
-	elements.refreshNote = document.getElementById("refresh-note");
+	elements.displayMode = document.getElementById("display-mode");
+	elements.displayNote = document.getElementById("display-note");
+	elements.pairingLink = document.getElementById("pairing-link");
+	elements.allowHttp = document.getElementById("allow-http");
+	elements.pairButton = document.getElementById("pair-button");
+	elements.pairingResult = document.getElementById("pairing-result");
+	elements.environmentList = document.getElementById("environment-list");
+	elements.environmentDetail = document.getElementById("environment-detail");
+	elements.removeConnection = document.getElementById("remove-connection");
 }
 
 function bindControls() {
-	elements.refreshInput.addEventListener("change", saveRefreshInterval);
+	elements.displayMode.addEventListener("change", saveDisplayMode);
+	elements.pairButton.addEventListener("click", () => {
+		const link = elements.pairingLink.value.trim();
+		if (!link || authBusy) return;
+		if (sendToPlugin({ command: "pair", link, allowHttp: elements.allowHttp.checked })) {
+			elements.pairingLink.value = "";
+			authBusy = true;
+			setSettingsEnabled(socketReady);
+			setTextContent(elements.pairingResult, "Pairing…");
+		}
+	});
+	elements.removeConnection.addEventListener("click", () => {
+		if (!elements.environmentList.value || authBusy) return;
+		if (sendToPlugin({ command: "removeConnection", environmentId: elements.environmentList.value })) {
+			authBusy = true;
+			setSettingsEnabled(socketReady);
+		}
+	});
+	elements.environmentList.addEventListener("change", renderEnvironmentDetail);
 }
 
 function setSettingsEnabled(enabled) {
-	elements.refreshInput.disabled = !enabled;
+	elements.displayMode.disabled = !enabled;
+	elements.pairingLink.disabled = !enabled || authBusy;
+	elements.allowHttp.disabled = !enabled || authBusy;
+	elements.pairButton.disabled = !enabled || authBusy;
+	elements.environmentList.disabled = !enabled || authBusy || connections.length === 0;
+	elements.removeConnection.disabled = !enabled || authBusy || connections.length === 0;
 }
 
 function applySettings(settings) {
-	const refreshSeconds = normalizeRefreshSeconds(settings?.refreshSeconds);
-	elements.refreshInput.value = String(refreshSeconds);
+	elements.displayMode.value = normalizeDisplayMode(settings?.displayMode);
+	updateDisplayNote();
 }
 
-function normalizeRefreshSeconds(value) {
-	const parsed = Number(value);
-	if (!Number.isFinite(parsed)) return DEFAULT_REFRESH_SECONDS;
-	return Math.min(MAX_REFRESH_SECONDS, Math.max(MIN_REFRESH_SECONDS, Math.round(parsed)));
+function normalizeDisplayMode(value) {
+	return value === "threads" || value === "questions" ? value : "combined";
 }
 
-function saveRefreshInterval() {
-	const entered = Number(elements.refreshInput.value);
-	const refreshSeconds = normalizeRefreshSeconds(elements.refreshInput.value);
-	elements.refreshInput.value = String(refreshSeconds);
-	const sent = sendSocketMessage({
+function updateDisplayNote() {
+	const descriptions = {
+		combined:
+			"Shows thread counts and a blinking question mark when input, approval, or plan review is pending.",
+		threads: "Shows working threads / all open threads. This key does not blink for questions.",
+		questions:
+			"A faded question mark when clear. The whole key flashes amber while input, approval, or plan review is pending.",
+	};
+	elements.displayNote.textContent = descriptions[normalizeDisplayMode(elements.displayMode.value)];
+}
+
+function saveSettings() {
+	return sendSocketMessage({
 		event: "setSettings",
 		context: actionContext,
-		payload: { refreshSeconds, settingsVersion: SETTINGS_VERSION },
+		payload: {
+			displayMode: normalizeDisplayMode(elements.displayMode.value),
+			settingsVersion: SETTINGS_VERSION,
+		},
 	});
-	if (!sent) {
-		elements.refreshNote.textContent = "Interval not saved. Check the connection to OpenDeck.";
-		return;
-	}
-	const wasAdjusted = !Number.isFinite(entered) || entered !== refreshSeconds;
-	elements.refreshNote.textContent = wasAdjusted
-		? `Adjusted to ${refreshSeconds} seconds. Choose a value from 5 to 300.`
-		: `Refresh set to ${refreshSeconds} seconds. Press the key to refresh immediately.`;
+}
+
+function saveDisplayMode() {
+	if (saveSettings()) updateDisplayNote();
+	else elements.displayNote.textContent = "Display not saved. Check the connection to OpenDeck.";
 }
 
 function sendToPlugin(payload) {
-	sendSocketMessage({
+	return sendSocketMessage({
 		action: ACTION_UUID,
 		event: "sendToPlugin",
 		context: actionContext,
@@ -182,6 +217,15 @@ function handleSocketMessage(event) {
 		return;
 	}
 
+	if (message.event === "sendToPropertyInspector" && message.payload?.type === "pairingResult") {
+		authBusy = false;
+		setSettingsEnabled(socketReady);
+		setTextContent(
+			elements.pairingResult,
+			message.payload.error ? localizeRuntimeError(message.payload.error) : "Connection settings saved.",
+		);
+		return;
+	}
 	if (message.event !== "sendToPropertyInspector" || message.payload?.type !== "connectionStatus") return;
 	renderConnectionStatus(message.payload);
 }
@@ -213,9 +257,12 @@ function isBoundedContext(value) {
 }
 
 function renderConnectionStatus(payload) {
+	if (Array.isArray(payload.status?.connections)) renderEnvironments(payload.status.connections);
 	const status = normalizeConnectionStatus(payload.status);
-	const errorCode = typeof payload.error === "string" ? payload.error.trim() : "";
-	const hasError = errorCode.length > 0;
+	const rawError = payload.error ?? payload.status?.error;
+	const errorCode = typeof rawError === "string" ? rawError.trim() : "";
+	const hasError =
+		errorCode.length > 0 && !["connecting", "pairing-required", "authorization-required"].includes(errorCode);
 	setBusy(Boolean(payload.busy));
 
 	if (hasError) {
@@ -228,7 +275,7 @@ function renderConnectionStatus(payload) {
 
 	if (payload.busy) {
 		setTextContent(elements.connectionState, busyLabel());
-		setTextContent(elements.connectionDetail, "Reading the local T3 cache.");
+		setTextContent(elements.connectionDetail, "Updating the live T3 connection…");
 		return;
 	}
 	if (hasError) {
@@ -242,11 +289,26 @@ function renderConnectionStatus(payload) {
 			setTextContent(elements.connectionState, "Connected");
 			setTextContent(elements.connectionDetail, connectedDetail(status));
 			break;
+		case "pairing-required":
+			setTextContent(elements.connectionState, "Pair T3 Code");
+			setTextContent(elements.connectionDetail, "Add a read-only pairing link below to start live updates.");
+			break;
+		case "authorization-required":
+			setTextContent(elements.connectionState, "Pairing needed");
+			setTextContent(
+				elements.connectionDetail,
+				"Authorization expired or was revoked. Paste a fresh read-only pairing link.",
+			);
+			break;
+		case "connecting":
+			setTextContent(elements.connectionState, "Connecting");
+			setTextContent(elements.connectionDetail, "Synchronizing thread status…");
+			break;
 		default:
 			setTextContent(elements.connectionState, "T3 Code offline");
 			setTextContent(
 				elements.connectionDetail,
-				"Start T3 Code. The plugin will then read its local thread cache.",
+				"Check that the paired environments are running and reachable. The plugin reconnects automatically.",
 			);
 	}
 }
@@ -255,37 +317,57 @@ function runtimeErrorLabel(code) {
 	switch (code) {
 		case "offline":
 			return "T3 Code offline";
-		case "cache-unavailable":
-			return "Cache unavailable";
+		case "pairing-required":
+			return "Pair T3 Code";
+		case "authorization-required":
+			return "Pairing needed";
+		case "connecting":
+			return "Connecting";
 		case "invalid-response":
-			return "Cache incompatible";
+			return "Connection incompatible";
 		default:
-			return "Cache read failed";
+			return "Connection unavailable";
 	}
 }
 
 function runtimeErrorDetail(code) {
-	return code === "offline"
-		? "Start T3 Code. The plugin will then read its local thread cache."
-		: "Thread status cannot update until the local cache is available.";
+	return localizeRuntimeError(code);
 }
 
 function localizeRuntimeError(code) {
 	switch (code) {
+		case "pairing-required":
+			return "Add a read-only pairing link below to start live updates.";
+		case "authorization-required":
+			return "Authorization expired or was revoked. Paste a fresh read-only pairing link.";
+		case "connecting":
+			return "Synchronizing thread status…";
+		case "invalid-link":
+			return "Paste the complete pairing link, including its token.";
+		case "insecure-origin":
+			return "Use HTTPS, or allow HTTP only if you trust this private network.";
+		case "identity-mismatch":
+			return "This address now belongs to a different T3 environment. Create a new pairing link.";
+		case "storage-error":
+			return "The plugin could not securely read or save its credentials. Check permissions on its private configuration folder.";
+		case "busy":
+			return "Another connection change is still in progress.";
 		case "offline":
-			return "T3 Code is not running or its local thread cache is unavailable.";
-		case "cache-unavailable":
-			return "The local T3 thread cache could not be opened.";
+			return "A paired environment is unreachable. Retrying automatically.";
 		case "invalid-response":
-			return "The local T3 thread cache contains unexpected data. Update T3 Code and try again.";
+			return "T3 returned an unexpected response. Check plugin and T3 Code compatibility.";
 		default:
-			return "The local T3 thread cache could not be read.";
+			return "The connection could not be completed. Try a fresh read-only pairing link.";
 	}
 }
 
 function normalizeConnectionStatus(status) {
 	if (status && typeof status === "object") {
-		const state = status.state === "connected" ? "connected" : "offline";
+		const state = ["connected", "connecting", "pairing-required", "authorization-required"].includes(
+			status.state,
+		)
+			? status.state
+			: "offline";
 		const environments = Number(status.environments);
 		return {
 			state,
@@ -299,7 +381,7 @@ function normalizeConnectionStatus(status) {
 function connectedDetail(status) {
 	const environmentLabel =
 		status.environments === 1 ? "1 Environment" : `${status.environments} Environments`;
-	return `${environmentLabel} · local cache · no sign-in`;
+	return `${environmentLabel} · live stream · read only`;
 }
 
 function setBusy(busy) {
@@ -307,7 +389,38 @@ function setBusy(busy) {
 }
 
 function busyLabel() {
-	return "Reading cache";
+	return "Connecting";
+}
+
+function renderEnvironments(items) {
+	const previous = elements.environmentList.value;
+	connections = items.filter((item) => item && typeof item.environmentId === "string").slice(0, 16);
+	const options = connections.map((item) => {
+		const option = document.createElement("option");
+		option.value = item.environmentId;
+		option.textContent = `${item.label} · ${item.state}`;
+		return option;
+	});
+	if (!options.length) {
+		const option = document.createElement("option");
+		option.value = "";
+		option.textContent = "No paired environments";
+		options.push(option);
+	}
+	elements.environmentList.replaceChildren(...options);
+	if (connections.some((item) => item.environmentId === previous)) elements.environmentList.value = previous;
+	renderEnvironmentDetail();
+	setSettingsEnabled(socketReady);
+}
+
+function renderEnvironmentDetail() {
+	const item = connections.find((item) => item.environmentId === elements.environmentList.value);
+	setTextContent(
+		elements.environmentDetail,
+		item
+			? `${item.origin} · Authorization expires ${new Date(item.expiresAt).toLocaleDateString()}${item.error ? ` · ${localizeRuntimeError(item.error)}` : ""}`
+			: "",
+	);
 }
 
 function setVisualState(state) {

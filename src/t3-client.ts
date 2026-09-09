@@ -11,7 +11,10 @@ import {
 	sameFileIdentity,
 	T3CacheError,
 } from "./t3-cache.js";
+import { T3ClientError } from "./t3-error.js";
 import type { ConnectionStatus, T3ShellSnapshot, ThreadSummary } from "./types.js";
+
+export { T3ClientError, type T3ClientErrorCode } from "./t3-error.js";
 
 const DEFAULT_AUTO_SETTLE_AFTER_DAYS = 3;
 const MIN_AUTO_SETTLE_AFTER_DAYS = 1;
@@ -24,20 +27,6 @@ const READ_ONLY_FILE_FLAGS =
 	process.platform === "win32"
 		? fileConstants.O_RDONLY
 		: fileConstants.O_RDONLY | fileConstants.O_NONBLOCK | fileConstants.O_NOFOLLOW;
-
-export type T3ClientErrorCode =
-	| "offline"
-	| "unsafe-origin"
-	| "invalid-response"
-	| "cache-unavailable"
-	| "cache-read-failed";
-
-export class T3ClientError extends Error {
-	constructor(readonly code: T3ClientErrorCode) {
-		super(code);
-		this.name = "T3ClientError";
-	}
-}
 
 interface RuntimeDescriptor {
 	origin: string;

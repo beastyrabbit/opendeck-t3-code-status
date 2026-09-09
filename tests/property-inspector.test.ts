@@ -14,6 +14,7 @@ const inspectorHtml = await readFile(
 
 interface FakeElement {
 	addEventListener(name: string, listener: () => void): void;
+	emit(name: string): void;
 	classList: { toggle(name: string, enabled: boolean): void };
 	dataset: Record<string, string>;
 	disabled: boolean;
@@ -40,16 +41,29 @@ function loadInspector() {
 		"connection-state",
 		"connection-detail",
 		"error-message",
-		"refresh-seconds",
-		"refresh-note",
+		"display-mode",
+		"display-note",
+		"pairing-link",
+		"allow-http",
+		"pair-button",
+		"pairing-result",
+		"environment-list",
+		"environment-detail",
+		"remove-connection",
 	]) {
 		let hidden = true;
 		let textContent = "";
+		const listeners = new Map<string, () => void>();
 		const element: FakeElement = {
-			addEventListener: () => undefined,
+			addEventListener: (name, listener) => {
+				listeners.set(name, listener);
+			},
+			emit: (name) => {
+				listeners.get(name)?.();
+			},
 			classList: { toggle: () => undefined },
 			dataset: {},
-			disabled: id === "refresh-seconds",
+			disabled: id === "display-mode",
 			get hidden() {
 				return hidden;
 			},
@@ -66,7 +80,7 @@ function loadInspector() {
 				this.textContentWrites += 1;
 			},
 			textContentWrites: 0,
-			value: id === "refresh-seconds" ? "60" : "",
+			value: id === "display-mode" ? "60" : "",
 		};
 		elements.set(id, element);
 	}
@@ -139,6 +153,37 @@ function loadInspector() {
 	};
 }
 
+test("display changes restore saved modes", () => {
+	const { connect, elements, socket } = loadInspector();
+	connect(
+		1234,
+		"pi-context",
+		"registerPropertyInspector",
+		"{}",
+		JSON.stringify({
+			context: "key-a",
+			payload: { settings: { displayMode: "questions", refreshSeconds: 90 } },
+		}),
+	);
+	const connection = socket();
+	assert.ok(connection);
+	const mode = elements.get("display-mode");
+	assert.ok(mode);
+	assert.equal(mode.disabled, true);
+	assert.equal(mode.value, "questions");
+	connection.open();
+	assert.equal(mode.disabled, false);
+	mode.value = "threads";
+	mode.emit("change");
+	assert.deepEqual(JSON.parse(connection.sent.at(-1) ?? ""), {
+		event: "setSettings",
+		context: "key-a",
+		payload: { displayMode: "threads", settingsVersion: 1 },
+	});
+	connection.emit("close");
+	assert.equal(mode.disabled, true);
+});
+
 test("the property inspector reports malformed or invalid action data", () => {
 	for (const actionInfo of ["{", "null", "[]", '"text"', "42"]) {
 		const { connect, elements } = loadInspector();
@@ -151,26 +196,44 @@ test("the property inspector reports malformed or invalid action data", () => {
 		assert.equal(elements.get("error-message")?.textContent, "OpenDeck sent invalid action data.");
 		assert.equal(elements.get("error-message")?.hidden, false);
 		assert.equal(elements.get("status-card")?.dataset.state, "error");
-		assert.equal(elements.get("refresh-seconds")?.disabled, true);
+		assert.equal(elements.get("display-mode")?.disabled, true);
 	}
 });
 
-test("the refresh interval stays disabled until the OpenDeck socket is ready", () => {
-	assert.match(inspectorHtml, /id="refresh-seconds"[\s\S]*?disabled[\s\S]*?aria-label=/);
+test("pairing sends a transient command, clears the secret, and keeps it out of key settings", () => {
 	const { connect, elements, socket } = loadInspector();
-	connect(
-		1234,
-		"pi-context",
-		"registerPropertyInspector",
-		"{}",
-		JSON.stringify({ context: "action-context", payload: { settings: { refreshSeconds: 90 } } }),
-	);
-	assert.equal(elements.get("refresh-seconds")?.disabled, true);
-	assert.equal(elements.get("refresh-seconds")?.value, "90");
+	connect(1234, "pi-context", "registerPropertyInspector", "{}", JSON.stringify({ context: "key-a" }));
 	const connection = socket();
 	assert.ok(connection);
 	connection.open();
-	assert.equal(elements.get("refresh-seconds")?.disabled, false);
+	const link = elements.get("pairing-link");
+	const button = elements.get("pair-button");
+	assert.ok(link);
+	assert.ok(button);
+	link.value = "http://127.0.0.1:3773/pair#token=fixture";
+	button.emit("click");
+	const message = JSON.parse(connection.sent.at(-1) ?? "");
+	assert.equal(message.event, "sendToPlugin");
+	assert.equal(message.payload.command, "pair");
+	assert.equal(message.payload.link, "http://127.0.0.1:3773/pair#token=fixture");
+	assert.equal(link.value, "");
+	assert.equal(button.disabled, true);
+	connection.emit("message", {
+		data: JSON.stringify({
+			event: "sendToPropertyInspector",
+			payload: { type: "pairingResult", error: "invalid-link" },
+		}),
+	});
+	assert.equal(button.disabled, false);
+	assert.equal(
+		elements.get("pairing-result")?.textContent,
+		"Paste the complete pairing link, including its token.",
+	);
+	const mode = elements.get("display-mode");
+	assert.ok(mode);
+	mode.value = "questions";
+	mode.emit("change");
+	assert.doesNotMatch(connection.sent.at(-1) ?? "", /fixture|token|pairing/);
 });
 
 test("connection updates use one atomic live region for status, detail, and recovery guidance", () => {
@@ -264,25 +327,28 @@ test("visible connection changes still update the live region", () => {
 		type: "connectionStatus",
 	});
 	assert.equal(state.textContent, "Connected");
-	assert.equal(detail.textContent, "3 Environments · local cache · no sign-in");
+	assert.equal(detail.textContent, "3 Environments · live stream · read only");
 	assert.equal(state.textContentWrites + detail.textContentWrites, connectedWrites + 1);
 
 	sendStatus({
-		error: "cache-unavailable",
-		status: { environments: 0, state: "offline" },
+		error: "authorization-required",
+		status: { environments: 0, state: "authorization-required" },
 		type: "connectionStatus",
 	});
-	assert.equal(state.textContent, "Cache unavailable");
-	assert.equal(detail.textContent, "Thread status cannot update until the local cache is available.");
-	assert.equal(error.textContent, "The local T3 thread cache could not be opened.");
-	assert.equal(error.hidden, false);
+	assert.equal(state.textContent, "Pairing needed");
+	assert.equal(
+		detail.textContent,
+		"Authorization expired or was revoked. Paste a fresh read-only pairing link.",
+	);
+	assert.equal(error.textContent, "");
+	assert.equal(error.hidden, true);
 
 	sendStatus({
 		status: { environments: 3, state: "connected" },
 		type: "connectionStatus",
 	});
 	assert.equal(state.textContent, "Connected");
-	assert.equal(detail.textContent, "3 Environments · local cache · no sign-in");
+	assert.equal(detail.textContent, "3 Environments · live stream · read only");
 	assert.equal(error.textContent, "");
 	assert.equal(error.hidden, true);
 });
@@ -300,13 +366,13 @@ test("websocket errors and normal closes disable settings without duplicate reco
 		const connection = inspector.socket();
 		assert.ok(connection);
 		connection.open();
-		assert.equal(inspector.elements.get("refresh-seconds")?.disabled, false);
+		assert.equal(inspector.elements.get("display-mode")?.disabled, false);
 		return { ...inspector, connection };
 	};
 
 	const failed = connectInspector();
 	failed.connection.emit("error");
-	assert.equal(failed.elements.get("refresh-seconds")?.disabled, true);
+	assert.equal(failed.elements.get("display-mode")?.disabled, true);
 	assert.equal(failed.elements.get("connection-state")?.textContent, "OpenDeck disconnected");
 	assert.equal(
 		failed.elements.get("connection-detail")?.textContent,
@@ -325,7 +391,7 @@ test("websocket errors and normal closes disable settings without duplicate reco
 
 	const closed = connectInspector();
 	closed.connection.emit("close");
-	assert.equal(closed.elements.get("refresh-seconds")?.disabled, true);
+	assert.equal(closed.elements.get("display-mode")?.disabled, true);
 	assert.equal(closed.elements.get("connection-state")?.textContent, "OpenDeck disconnected");
 	assert.equal(closed.elements.get("error-message")?.textContent, "The connection to OpenDeck was closed.");
 });
@@ -337,7 +403,7 @@ test("the property inspector rejects oversized startup data before opening a soc
 	assert.equal(socket(), undefined);
 	assert.equal(elements.get("connection-state")?.textContent, "Settings unavailable");
 	assert.equal(elements.get("error-message")?.textContent, "OpenDeck sent invalid or oversized action data.");
-	assert.equal(elements.get("refresh-seconds")?.disabled, true);
+	assert.equal(elements.get("display-mode")?.disabled, true);
 });
 
 test("malformed bounded messages are ignored and a later valid message still renders", () => {
@@ -366,7 +432,7 @@ test("malformed bounded messages are ignored and a later valid message still ren
 	});
 
 	assert.equal(elements.get("connection-state")?.textContent, "Connected");
-	assert.equal(elements.get("connection-detail")?.textContent, "2 Environments · local cache · no sign-in");
+	assert.equal(elements.get("connection-detail")?.textContent, "2 Environments · live stream · read only");
 	assert.deepEqual(connection.closeCalls, []);
 });
 
@@ -383,12 +449,12 @@ test("an oversized websocket message closes the connection with a bounded local 
 		elements.get("error-message")?.textContent,
 		"OpenDeck sent an oversized or unsupported settings message.",
 	);
-	assert.equal(elements.get("refresh-seconds")?.disabled, true);
+	assert.equal(elements.get("display-mode")?.disabled, true);
 
 	connection.emit("message", {
 		data: JSON.stringify({ event: "didReceiveSettings", payload: { settings: { refreshSeconds: 90 } } }),
 	});
-	assert.equal(elements.get("refresh-seconds")?.value, "60");
+	assert.equal(elements.get("display-mode")?.value, "combined");
 });
 
 test("a websocket message flood is cut off before unbounded parsing work accumulates", () => {
@@ -402,5 +468,5 @@ test("a websocket message flood is cut off before unbounded parsing work accumul
 
 	assert.deepEqual(connection.closeCalls, [{ code: 1009, reason: "Settings input limit exceeded" }]);
 	assert.equal(elements.get("error-message")?.textContent, "OpenDeck sent settings messages too quickly.");
-	assert.equal(elements.get("refresh-seconds")?.disabled, true);
+	assert.equal(elements.get("display-mode")?.disabled, true);
 });

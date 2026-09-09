@@ -449,28 +449,42 @@ test("emptySummary returns a fresh all-zero summary", () => {
 
 describe("normalizeSettings", () => {
 	test("uses the default when the setting is absent or not finite", () => {
-		assert.deepEqual(normalizeSettings(undefined), { refreshSeconds: DEFAULT_REFRESH_SECONDS });
-		assert.deepEqual(normalizeSettings({}), { refreshSeconds: DEFAULT_REFRESH_SECONDS });
+		assert.deepEqual(normalizeSettings(undefined), {
+			displayMode: "combined",
+			refreshSeconds: DEFAULT_REFRESH_SECONDS,
+		});
+		assert.deepEqual(normalizeSettings({}), {
+			displayMode: "combined",
+			refreshSeconds: DEFAULT_REFRESH_SECONDS,
+		});
 		assert.deepEqual(normalizeSettings({ refreshSeconds: Number.NaN }), {
+			displayMode: "combined",
 			refreshSeconds: DEFAULT_REFRESH_SECONDS,
 		});
 		assert.deepEqual(normalizeSettings({ refreshSeconds: Number.POSITIVE_INFINITY }), {
+			displayMode: "combined",
 			refreshSeconds: DEFAULT_REFRESH_SECONDS,
 		});
 	});
 
 	test("rounds values and clamps them to the supported interval", () => {
-		assert.deepEqual(normalizeSettings({ refreshSeconds: 21.6 }), { refreshSeconds: 22 });
+		assert.deepEqual(normalizeSettings({ refreshSeconds: 21.6 }), {
+			displayMode: "combined",
+			refreshSeconds: 22,
+		});
 		assert.deepEqual(normalizeSettings({ refreshSeconds: MIN_REFRESH_SECONDS - 1 }), {
+			displayMode: "combined",
 			refreshSeconds: MIN_REFRESH_SECONDS,
 		});
 		assert.deepEqual(normalizeSettings({ refreshSeconds: MAX_REFRESH_SECONDS + 1 }), {
+			displayMode: "combined",
 			refreshSeconds: MAX_REFRESH_SECONDS,
 		});
 	});
 
 	test("accepts the numeric strings emitted by a property inspector", () => {
 		assert.deepEqual(normalizeSettings({ refreshSeconds: "45" } as unknown as { refreshSeconds: number }), {
+			displayMode: "combined",
 			refreshSeconds: 45,
 		});
 	});

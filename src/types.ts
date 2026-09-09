@@ -5,12 +5,16 @@ export const MIN_REFRESH_SECONDS = 5;
 export const MAX_REFRESH_SECONDS = 300;
 export const SETTINGS_VERSION = 1;
 
+export type DisplayMode = "combined" | "threads" | "questions";
+
 export interface ActionSettings {
+	displayMode?: DisplayMode;
 	refreshSeconds?: number;
 	settingsVersion?: number;
 }
 
 export interface NormalizedSettings {
+	displayMode: DisplayMode;
 	refreshSeconds: number;
 }
 
@@ -88,16 +92,37 @@ export type DashboardModel =
 	| { kind: "loading" }
 	| { kind: "ready"; summary: ThreadSummary; refreshedAt: number }
 	| { kind: "offline" }
+	| { kind: "pairing" }
 	| { kind: "error" };
+
+export interface EnvironmentStatus {
+	environmentId: string;
+	label: string;
+	origin: string;
+	expiresAt: number;
+	state: "connected" | "connecting" | "offline" | "authorization-required";
+	error?: string;
+}
 
 export type ConnectionStatus =
 	| { state: "connected"; origin: string; environments: number }
-	| { state: "offline"; origin?: string };
+	| { state: "offline"; origin?: string }
+	| {
+			state: "connected" | "connecting" | "offline" | "authorization-required" | "pairing-required" | "error";
+			origin?: string;
+			environments?: number;
+			connections: EnvironmentStatus[];
+			error?: string;
+	  };
 
 export function normalizeSettings(settings: ActionSettings | undefined): NormalizedSettings {
 	const candidate = Number(settings?.refreshSeconds);
 	const refreshSeconds = Number.isFinite(candidate)
 		? Math.min(MAX_REFRESH_SECONDS, Math.max(MIN_REFRESH_SECONDS, Math.round(candidate)))
 		: DEFAULT_REFRESH_SECONDS;
-	return { refreshSeconds };
+	const displayMode =
+		settings?.displayMode === "threads" || settings?.displayMode === "questions"
+			? settings.displayMode
+			: "combined";
+	return { displayMode, refreshSeconds };
 }

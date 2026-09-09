@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { getAccessibleTitle, getDisplay, renderDashboard } from "../src/render.js";
+import { getAccessibleTitle, getDisplay, hasOpenQuestions, renderDashboard } from "../src/render.js";
 import type { DashboardModel, ThreadSummary } from "../src/types.js";
 
 function summary(overrides: Partial<ThreadSummary> = {}): ThreadSummary {
@@ -164,6 +164,60 @@ function decodeSvg(dataUrl: string): string {
 	assert.ok(dataUrl.startsWith(prefix));
 	return Buffer.from(dataUrl.slice(prefix.length), "base64").toString("utf8");
 }
+
+test("question alerts cover input, approvals and plans but exclude waiting and failures", () => {
+	for (const state of ["input", "approval", "plan", "waiting", "failed", "monitoring"] as const) {
+		const model: DashboardModel = {
+			kind: "ready",
+			refreshedAt: 0,
+			summary: summary({ total: 1, [state]: 1 }),
+		};
+		const alerts = ["input", "approval", "plan"].includes(state);
+		assert.equal(hasOpenQuestions(model), alerts);
+		const bright = decodeSvg(renderDashboard(model, 0, "questions", true));
+		const dim = decodeSvg(renderDashboard(model, 0, "questions", false));
+		assert.equal(bright !== dim, alerts);
+		if (alerts) {
+			assert.match(bright, /<rect[^>]*fill="#FFBE55"/);
+			assert.match(dim, /<rect[^>]*fill="#071014"/);
+			assert.match(bright, />1 NEEDS YOU<\/text>/);
+		} else {
+			assert.match(bright, /opacity="0.12">\?<\/text>/);
+			assert.match(bright, />NO QUESTIONS<\/text>/);
+		}
+	}
+});
+
+test("combined alerts retain thread counts and thread-only mode never blinks", () => {
+	const empty: DashboardModel = { kind: "ready", refreshedAt: 0, summary: summary({ total: 0, running: 0 }) };
+	assert.equal(getDisplay(empty, "threads").accent, "#6F858E");
+	const model: DashboardModel = {
+		kind: "ready",
+		refreshedAt: 0,
+		summary: summary({ total: 6, running: 4, input: 1, failed: 1 }),
+	};
+	const combined = decodeSvg(renderDashboard(model, 0, "combined", true));
+	assert.match(combined, />\?<\/text>/);
+	assert.match(combined, />4\/6<\/text>/);
+	assert.match(combined, />1 NEEDS YOU<\/text>/);
+	assert.notEqual(combined, decodeSvg(renderDashboard(model, 0, "combined", false)));
+	const threads = renderDashboard(model, 0, "threads", true);
+	assert.equal(threads, renderDashboard(model, 0, "threads", false));
+	assert.doesNotMatch(decodeSvg(threads), />\?<\/text>|NEEDS YOU|ERROR/);
+	assert.match(getAccessibleTitle(model, "combined"), /1 error, 1 need your attention/);
+	assert.equal(getAccessibleTitle(model, "threads"), "4 of 6 threads working");
+	assert.match(getAccessibleTitle(model, "questions"), /1 thread needs your input/);
+});
+
+test("every mode shows connection failures instead of a question or a false all-clear", () => {
+	for (const kind of ["loading", "offline", "error"] as const) {
+		for (const mode of ["combined", "threads", "questions"] as const) {
+			assert.equal(renderDashboard({ kind }, 0, mode, true), renderDashboard({ kind }, 0, mode, false));
+			assert.doesNotMatch(decodeSvg(renderDashboard({ kind }, 0, mode)), />\?<\/text>|NO QUESTIONS/);
+			assert.equal(getAccessibleTitle({ kind }, mode), getAccessibleTitle({ kind }));
+		}
+	}
+});
 
 test("renderDashboard returns a self-contained 144-pixel SVG", () => {
 	const model: DashboardModel = {

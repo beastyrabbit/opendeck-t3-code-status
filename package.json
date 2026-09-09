@@ -36,7 +36,6 @@
 	"packageManager": "pnpm@11.24.0",
 	"type": "module",
 	"dependencies": {
-		"snappyjs": "^0.7.0",
 		"ws": "^8.21.3"
 	},
 	"devDependencies": {
@@ -46,6 +45,7 @@
 		"@types/ws": "^8.18.1",
 		"esbuild": "^0.28.2",
 		"lefthook": "^2.1.12",
+		"snappyjs": "^0.7.0",
 		"tsx": "^4.23.13",
 		"typescript": "^7.0.2"
 	}

@@ -27,45 +27,48 @@
 
 			<section class="status-card" aria-labelledby="connection-heading">
 				<div class="status-card__top">
-					<p class="section-label" id="connection-heading">Local T3 cache</p>
+					<p class="section-label" id="connection-heading">Live T3 connection</p>
 					<span class="status-light" id="status-light" data-state="loading" aria-hidden="true"></span>
 				</div>
 				<div id="connection-announcement" role="status" aria-live="polite" aria-atomic="true">
-					<p class="connection-state" id="connection-state">Reading cache</p>
+					<p class="connection-state" id="connection-state">Connecting</p>
 					<p class="connection-detail" id="connection-detail">
-						Looking for T3 Code. No sign-in required.
+						Checking your paired environments.
 					</p>
 					<p class="error-message" id="error-message" hidden></p>
 				</div>
 			</section>
 
-			<section class="control-section" aria-labelledby="refresh-heading">
-				<div class="section-heading">
-					<div>
-						<p class="section-label" id="refresh-heading">Refresh interval</p>
-						<p class="section-copy">The ring on the key runs until the next cache read.</p>
-					</div>
-					<span class="section-code">TIMER</span>
-				</div>
-				<label class="number-control" for="refresh-seconds">
-					<input
-						id="refresh-seconds"
-						type="number"
-						min="5"
-						max="300"
-						step="1"
-							inputmode="numeric"
-							value="60"
-							disabled
-							aria-label="Refresh interval in seconds"
-						aria-describedby="refresh-note"
-					/>
-					<span>seconds</span>
-				</label>
-				<p class="field-note" id="refresh-note" aria-live="polite">
-					Choose 5 to 300 seconds. Press the key to refresh immediately.
-				</p>
+			<section class="control-section" aria-labelledby="pair-heading">
+				<label class="section-label" id="pair-heading" for="pairing-link">Pair an environment</label>
+				<p class="field-note">In T3 Code, open Settings → Connections, enable Network access if needed, and create a Read only pairing link. Paste the complete link below.</p>
+				<input id="pairing-link" type="password" autocomplete="off" spellcheck="false" maxlength="16384" placeholder="Paste read-only pairing link" disabled />
+				<label class="field-note http-option"><input id="allow-http" type="checkbox" disabled /> Allow unencrypted HTTP on my trusted private network</label>
+				<button id="pair-button" type="button" disabled>Pair / replace authorization</button>
+				<p id="pairing-result" class="field-note" role="status" aria-live="polite"></p>
+				<p class="field-note">Pair once per environment for all keys. A new link for the same environment replaces its saved authorization. After T3's 30-day authorization expires, reconnecting requires a fresh link. An existing stream may stay connected longer.</p>
+				<p class="field-note">Read only also permits access to files and conversations. This plugin requests only the thread status stream.</p>
+				<label class="section-label" for="environment-list">Paired environments</label>
+				<select id="environment-list" disabled><option value="">No paired environments</option></select>
+				<p id="environment-detail" class="field-note"></p>
+				<button id="remove-connection" type="button" disabled>Forget selected environment</button>
+				<p class="field-note">Forgetting removes the credential from this plugin. Revoke its access in T3 Settings → Connections.</p>
 			</section>
+
+			<section class="control-section" aria-labelledby="display-heading">
+				<label class="section-label" id="display-heading" for="display-mode">Key display</label>
+				<select id="display-mode" aria-describedby="display-note" disabled>
+					<option value="combined">Threads + questions</option>
+					<option value="threads">Threads only</option>
+					<option value="questions">Questions only</option>
+				</select>
+				<p class="field-note" id="display-note" aria-live="polite">
+					Shows thread counts and a blinking question mark when input, approval, or plan review is pending.
+				</p>
+				<p class="field-note">For separate keys, add Thread status twice and choose a different display on each.</p>
+			</section>
+
+			<p class="field-note">Status updates arrive live. Press a key to retry an offline connection. A full ring means the stream is connected.</p>
 		</main>
 	</body>
 </html>
