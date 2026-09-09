@@ -46,7 +46,7 @@
 				<label class="field-note http-option"><input id="allow-http" type="checkbox" disabled /> Allow unencrypted HTTP on my trusted private network</label>
 				<button id="pair-button" type="button" disabled>Pair / replace authorization</button>
 				<p id="pairing-result" class="field-note" role="status" aria-live="polite"></p>
-				<p class="field-note">Pair once per environment for all keys. A new link for the same environment replaces its saved authorization. T3 currently requires a new link after the 30-day session expires.</p>
+				<p class="field-note">Pair once per environment for all keys. A new link for the same environment replaces its saved authorization. After T3's 30-day authorization expires, reconnecting requires a fresh link. An existing stream may stay connected longer.</p>
 				<p class="field-note">Read only also permits access to files and conversations. This plugin requests only the thread status stream.</p>
 				<label class="section-label" for="environment-list">Paired environments</label>
 				<select id="environment-list" disabled><option value="">No paired environments</option></select>

@@ -300,8 +300,6 @@ export class T3LiveClient {
 			if (!current()) return;
 			if (!record(descriptor) || descriptor.environmentId !== env.saved.environmentId)
 				throw new LiveConnectionError("identity-mismatch");
-			const marker =
-				record(descriptor.capabilities) && descriptor.capabilities.shellResumeCompletionMarker === true;
 			const ticket = await this.request(
 				env.saved.origin,
 				"/api/auth/websocket-ticket",
@@ -339,19 +337,15 @@ export class T3LiveClient {
 					socket.terminate();
 					return;
 				}
-				const payload = marker
-					? {
-							...(env.sequence === undefined ? {} : { afterSequence: env.sequence }),
-							requestCompletionMarker: true,
-						}
-					: {};
-				// Without a completion marker, request a full snapshot so stale state is never shown as live.
+				// A fresh snapshot on every connection avoids depending on optional replay markers.
+				env.sequence = undefined;
+				env.threads.clear();
 				socket.send(
 					JSON.stringify({
 						_tag: "Request",
 						id: "shell",
 						tag: "orchestration.subscribeShell",
-						payload,
+						payload: {},
 						headers: [],
 					}),
 				);
@@ -384,7 +378,7 @@ export class T3LiveClient {
 						}
 						if (message._tag !== "Chunk" || message.requestId !== "shell" || !Array.isArray(message.values))
 							throw new Error();
-						for (const item of message.values) this.apply(env, item, marker);
+						for (const item of message.values) this.apply(env, item);
 						if (socket.readyState === WebSocket.OPEN)
 							socket.send(JSON.stringify({ _tag: "Ack", requestId: "shell" }));
 					}
@@ -399,7 +393,7 @@ export class T3LiveClient {
 			if (current()) this.fail(env, error instanceof LiveConnectionError ? error.code : "offline");
 		}
 	}
-	private apply(env: Environment, item: unknown, marker: boolean): void {
+	private apply(env: Environment, item: unknown): void {
 		if (!record(item)) throw new Error();
 		if (item.kind === "snapshot") {
 			const snapshot = item.snapshot;
@@ -418,11 +412,6 @@ export class T3LiveClient {
 			}
 			env.threads = threads;
 			env.sequence = snapshot.snapshotSequence;
-			if (!marker) this.synchronized(env);
-			return;
-		}
-		if (item.kind === "synchronized") {
-			if (env.sequence === undefined) throw new Error();
 			this.synchronized(env);
 			return;
 		}

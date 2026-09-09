@@ -33,7 +33,7 @@ const thread = (id = "thread-1", extra = {}) => ({
 	...extra,
 });
 
-async function fixture(context: TestContext, marker = true) {
+async function fixture(context: TestContext) {
 	const requests: Array<{ path: string; authorization?: string; body: string }> = [];
 	const subscriptions: Array<Record<string, unknown>> = [];
 	const sockets: WebSocket[] = [];
@@ -41,7 +41,6 @@ async function fixture(context: TestContext, marker = true) {
 	let environmentId = "env-1";
 	let expiresIn = 30 * 86400;
 	let grantedScope = "orchestration:read";
-	let descriptorCapability = marker;
 	const server = createServer(async (request, response) => {
 		let body = "";
 		for await (const chunk of request) body += chunk;
@@ -52,7 +51,7 @@ async function fixture(context: TestContext, marker = true) {
 				JSON.stringify({
 					environmentId,
 					label: "Test environment",
-					capabilities: { shellResumeCompletionMarker: descriptorCapability },
+					capabilities: { terminal: true },
 				}),
 			);
 		else if (rejected) {
@@ -85,7 +84,6 @@ async function fixture(context: TestContext, marker = true) {
 					snapshot: { snapshotSequence: 10, threads: [thread()], updatedAt: new Date().toISOString() },
 				},
 			]);
-		if (descriptorCapability) send(socket, [{ kind: "synchronized" }]);
 	};
 	ws.on("connection", (socket, request) => {
 		assert.equal(
@@ -132,9 +130,6 @@ async function fixture(context: TestContext, marker = true) {
 		},
 		setScope: (value: string) => {
 			grantedScope = value;
-		},
-		setMarker: (value: boolean) => {
-			descriptorCapability = value;
 		},
 		onSubscribe: (callback: typeof onSubscribe) => {
 			onSubscribe = callback;
@@ -193,7 +188,7 @@ test("pairing exchanges only read scope, streams input changes and removals with
 	await until(client, async () => (await client.getSnapshot()).summary.total === 0);
 });
 
-test("reconnect requests a fresh ticket and resumes after the last applied sequence", async (context) => {
+test("reconnect requests a fresh ticket and snapshot before accepting live updates", async (context) => {
 	const server = await fixture(context);
 	const client = new T3LiveClient({ store: new MemoryStore(), retryMs: 10 });
 	context.after(() => client.dispose());
@@ -204,11 +199,18 @@ test("reconnect requests a fresh ticket and resumes after the last applied seque
 	]);
 	await until(client, async () => (await client.getSnapshot()).summary.input === 1);
 	server.onSubscribe((socket, payload) => {
-		assert.equal(payload.afterSequence, 19);
+		assert.deepEqual(payload, {});
 		send(socket, [
-			{ kind: "thread-upserted", sequence: 19, thread: thread() },
-			{ kind: "thread-upserted", sequence: 21, thread: thread("thread-2") },
-			{ kind: "synchronized" },
+			{
+				kind: "snapshot",
+				snapshot: {
+					snapshotSequence: 21,
+					threads: [thread("thread-2")],
+					updatedAt: new Date().toISOString(),
+				},
+			},
+			{ kind: "thread-upserted", sequence: 21, thread: thread("ignored-duplicate") },
+			{ kind: "thread-upserted", sequence: 22, thread: thread("thread-3") },
 		]);
 	});
 	firstSocket(server.sockets).terminate();
@@ -217,7 +219,7 @@ test("reconnect requests a fresh ticket and resumes after the last applied seque
 		async () =>
 			server.subscriptions.length === 2 && (await client.getConnectionStatus()).state === "connected",
 	);
-	assert.equal((await client.getSnapshot()).summary.input, 1);
+	assert.equal((await client.getSnapshot()).summary.input, 0);
 	assert.equal((await client.getSnapshot()).summary.total, 2);
 	assert.equal(server.requests.filter((item) => item.path === "/oauth/token").length, 1);
 	assert.equal(server.requests.filter((item) => item.path === "/api/auth/websocket-ticket").length, 2);
@@ -232,6 +234,12 @@ test("expired sessions stop automatic retries; re-pair replaces credentials with
 	await client.pair(server.link);
 	await connected(client);
 	now += 31 * 86400_000;
+	// T3 authorizes at upgrade: an uninterrupted stream can outlive its bearer credential.
+	assert.equal((await client.getConnectionStatus()).state, "connected");
+	send(firstSocket(server.sockets), [
+		{ kind: "thread-upserted", sequence: 12, thread: thread("thread-1", { hasPendingUserInput: true }) },
+	]);
+	await until(client, async () => (await client.getSnapshot()).summary.input === 1);
 	firstSocket(server.sockets).terminate();
 	await until(client, async () => (await client.getConnectionStatus()).state === "authorization-required");
 	await assert.rejects(client.getSnapshot(), { code: "authorization-required" });
@@ -247,25 +255,28 @@ test("expired sessions stop automatic retries; re-pair replaces credentials with
 	assert.equal((await client.getConnectionStatus()).state, "pairing-required");
 });
 
-test("old servers receive no resume options; replacement snapshots recover from stale cursors", async (context) => {
-	const server = await fixture(context, false);
+test("reconnect waits for a fresh snapshot even when no events changed", async (context) => {
+	const server = await fixture(context);
 	const client = new T3LiveClient({ store: new MemoryStore(), retryMs: 10 });
 	context.after(() => client.dispose());
 	await client.pair(server.link);
 	await connected(client);
 	assert.deepEqual(server.subscriptions[0], {});
-	server.setMarker(true);
-	server.onSubscribe((socket, payload) => {
-		assert.equal(payload.afterSequence, 10);
-		send(socket, [
-			{
-				kind: "snapshot",
-				snapshot: { snapshotSequence: 1000, threads: [], updatedAt: new Date().toISOString() },
-			},
-			{ kind: "synchronized" },
-		]);
+	server.onSubscribe((_socket, payload) => {
+		assert.deepEqual(payload, {});
 	});
 	firstSocket(server.sockets).terminate();
+	await until(client, async () => server.subscriptions.length === 2);
+	assert.equal((await client.getConnectionStatus()).state, "connecting");
+	await assert.rejects(client.getSnapshot(), { code: "connecting" });
+	const socket = server.sockets[1];
+	assert.ok(socket);
+	send(socket, [
+		{
+			kind: "snapshot",
+			snapshot: { snapshotSequence: 1000, threads: [], updatedAt: new Date().toISOString() },
+		},
+	]);
 	await until(
 		client,
 		async () =>
@@ -395,7 +406,6 @@ test("malformed stream data drops stale state and reconnects with a complete sna
 				kind: "snapshot",
 				snapshot: { snapshotSequence: 22, threads: [], updatedAt: new Date().toISOString() },
 			},
-			{ kind: "synchronized" },
 		]);
 	});
 	send(firstSocket(server.sockets), [{ kind: "thread-upserted", sequence: 12, thread: { id: "bad" } }]);
