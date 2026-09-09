@@ -12,7 +12,7 @@ const distRoot = resolve(projectRoot, "dist");
 const outputRoot = resolve(distRoot, PLUGIN_DIRECTORY);
 const setupOutput = resolve(projectRoot, "dist", "setup-opendeck.mjs");
 const require = createRequire(import.meta.url);
-const BUNDLED_DEPENDENCIES = ["snappyjs", "ws"] as const;
+const BUNDLED_DEPENDENCIES = ["ws"] as const;
 const PLUGIN_SOURCE_FILES = [
 	"manifest.json",
 	"icons/action.svg",

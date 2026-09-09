@@ -2,11 +2,11 @@
 
 import { T3CodeController } from "./controller.js";
 import { OpenDeckHost } from "./opendeck.js";
-import { T3Client } from "./t3-client.js";
+import { T3LiveClient } from "./t3-live-client.js";
 
 export async function main(argumentsList = process.argv.slice(2)): Promise<void> {
 	const host = new OpenDeckHost(argumentsList);
-	const controller = new T3CodeController(host, new T3Client());
+	const controller = new T3CodeController(host, new T3LiveClient());
 	host.onEvent((event) => controller.handle(event));
 
 	let stopping = false;

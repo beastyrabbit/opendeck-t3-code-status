@@ -10,6 +10,7 @@ import {
 	type OpenDeckEvent,
 } from "../src/opendeck.js";
 import { T3ClientError, type T3ClientSnapshot } from "../src/t3-client.js";
+import { LiveConnectionError } from "../src/t3-protocol.js";
 import { ACTION_UUID, type ConnectionStatus, type ThreadSummary } from "../src/types.js";
 
 interface ImageCall {
@@ -87,6 +88,40 @@ class FakeClient implements T3StatusClient {
 	}
 }
 
+test("live updates reach every display immediately and interval ticks do not poll", async (context) => {
+	useMockedIntervals(context);
+	let update = () => {};
+	let unsubscribed = false;
+	const host = new FakeHost();
+	const client = new FakeClient() as FakeClient & T3StatusClient;
+	client.subscribe = (listener) => {
+		update = listener;
+		return () => {
+			unsubscribed = true;
+		};
+	};
+	const controller = new T3CodeController(host, client);
+	controller.handle(event("willAppear", "key-a"));
+	controller.handle(event("willAppear", "key-b", { settings: { displayMode: "questions" } }));
+	await flushMicrotasks();
+	const reads = client.getSummaryCalls;
+	context.mock.timers.tick(300_000);
+	await flushMicrotasks();
+	assert.equal(client.getSummaryCalls, reads);
+	client.onGetSummary = async () => summary({ input: 1 });
+	update();
+	await flushMicrotasks();
+	assert.ok(host.titles.some((call) => call.context === "key-b" && call.title.includes("needs your input")));
+	client.onGetSummary = async () => {
+		throw new LiveConnectionError("authorization-required");
+	};
+	update();
+	await flushMicrotasks();
+	assert.equal(host.titles.at(-1)?.title, "Pair T3 Code in the OpenDeck key settings");
+	await controller.dispose();
+	assert.equal(unsubscribed, true);
+});
+
 function summary(overrides: Partial<ThreadSummary> = {}): ThreadSummary {
 	return {
 		total: 6,
@@ -149,6 +184,53 @@ function useMockedIntervals(context: TestContext): void {
 	context.mock.timers.enable({ apis: ["setInterval"] });
 }
 
+test("keys blink independently of the refresh ring and stop after answers, mode changes, or removal", async (context) => {
+	useMockedIntervals(context);
+	let now = 0;
+	const host = new FakeHost();
+	const client = new FakeClient();
+	client.onGetSummary = async () => summary({ input: 1, waiting: 1 });
+	const controller = new T3CodeController(host, client, { now: () => now });
+	context.after(() => controller.dispose());
+	for (const displayMode of ["combined", "threads", "questions"]) {
+		controller.handle(
+			event("willAppear", displayMode, { settings: { displayMode, refreshSeconds: 60, settingsVersion: 1 } }),
+		);
+	}
+	await flushMicrotasks();
+	const initial = Object.fromEntries(
+		["combined", "threads", "questions"].map((mode) => [mode, latestSvg(host, mode)]),
+	);
+	const titleCount = host.titles.length;
+	const readCount = client.getSummaryCalls;
+	now = 500;
+	context.mock.timers.tick(500);
+	assert.notEqual(latestSvg(host, "combined"), initial.combined);
+	assert.notEqual(latestSvg(host, "questions"), initial.questions);
+	assert.equal(latestSvg(host, "threads"), initial.threads);
+	assert.equal(host.titles.length, titleCount);
+	assert.equal(client.getSummaryCalls, readCount);
+	controller.handle(
+		event("didReceiveSettings", "combined", {
+			settings: { displayMode: "threads", refreshSeconds: 60, settingsVersion: 1 },
+		}),
+	);
+	assert.equal(latestSvg(host, "combined"), initial.threads);
+	client.onGetSummary = async () => summary();
+	controller.handle(event("keyUp", "questions"));
+	await flushMicrotasks();
+	const cleared = latestSvg(host, "questions");
+	assert.match(cleared, /opacity="0.12">\?/);
+	now = 1_000;
+	context.mock.timers.tick(500);
+	assert.equal(latestSvg(host, "questions"), cleared);
+	for (const key of ["combined", "threads", "questions"]) controller.handle(event("willDisappear", key));
+	const imageCount = host.images.length;
+	now = 10_000;
+	context.mock.timers.tick(9_000);
+	assert.equal(host.images.length, imageCount);
+});
+
 test("willAppear renders loading immediately and then the fetched summary", async (context) => {
 	useMockedIntervals(context);
 	const host = new FakeHost();
@@ -189,7 +271,7 @@ test("willAppear migrates the old 15-second default to 60 seconds once", async (
 	await flushMicrotasks();
 
 	assert.deepEqual(host.settings, [
-		{ context: "key-a", settings: { refreshSeconds: 60, settingsVersion: 1 } },
+		{ context: "key-a", settings: { displayMode: "combined", refreshSeconds: 60, settingsVersion: 1 } },
 	]);
 	now = 15_000;
 	context.mock.timers.tick(15_000);
@@ -738,4 +820,35 @@ test("events for another action and events after disposal have no effect", async
 	assert.equal(client.getSummaryCalls, 0);
 	assert.deepEqual(host.images, []);
 	assert.deepEqual(host.settings, []);
+});
+
+test("concurrent pairing commands get a busy response and never write credentials to key settings", async () => {
+	const host = new FakeHost();
+	const client = new FakeClient() as FakeClient & T3StatusClient;
+	let finish: () => void = () => {};
+	let calls = 0;
+	client.pair = async () => {
+		calls++;
+		await new Promise<void>((resolve) => {
+			finish = resolve;
+		});
+	};
+	const controller = new T3CodeController(host, client);
+	controller.handle(
+		event("sendToPlugin", "key-a", { command: "pair", link: "http://localhost/pair#token=fixture" }),
+	);
+	controller.handle(
+		event("sendToPlugin", "key-b", { command: "pair", link: "http://localhost/pair#token=fixture-two" }),
+	);
+	assert.equal(calls, 1);
+	assert.ok(
+		host.inspectorMessages.some(
+			(message) => message.context === "key-b" && JSON.stringify(message.payload).includes('"error":"busy"'),
+		),
+	);
+	finish();
+	await flushMicrotasks();
+	assert.doesNotMatch(JSON.stringify(host.settings), /fixture|token/);
+	assert.doesNotMatch(JSON.stringify(host.inspectorMessages), /fixture/);
+	await controller.dispose();
 });

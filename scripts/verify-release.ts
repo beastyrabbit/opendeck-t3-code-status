@@ -23,20 +23,7 @@ const REQUIRED_PLUGIN_FILES = [
 	"property-inspector/property-inspector.js",
 	"property-inspector/styles.css",
 ];
-const LEGACY_AUTH_MARKERS = [
-	"credential.json",
-	"local-pairing",
-	"pairing-form",
-	"pairing-failed",
-	"pairing-route",
-	"pairing-section",
-	"pairingCode",
-	"pairWithT3Code",
-	"subject_token",
-	"Create pairing link",
-	"T3 Code koppeln",
-	"enqueueAuthOperation",
-];
+const LEGACY_CACHE_MARKERS = ["readT3ShellCache", "T3CODE_CACHE_DIR", "indexeddb.leveldb"];
 
 interface SetupModule {
 	setupOpenDeck: (
@@ -73,7 +60,7 @@ export async function verifyRelease(projectRoot: string): Promise<void> {
 		"the built plugin contains unexpected or missing files",
 	);
 	await verifyManifest(resolve(builtPlugin, "manifest.json"), expectedManifestVersion);
-	await verifyAuthFreeBundle(builtPlugin);
+	await verifyLiveBundle(builtPlugin);
 
 	const temporaryRoot = await mkdtemp(join(tmpdir(), "t3-code-status-release-"));
 	try {
@@ -207,7 +194,7 @@ async function verifyManifest(path: string, expectedVersion: string): Promise<vo
 	);
 }
 
-async function verifyAuthFreeBundle(pluginRoot: string): Promise<void> {
+async function verifyLiveBundle(pluginRoot: string): Promise<void> {
 	const checkedFiles = [
 		"bin/plugin.cjs",
 		"property-inspector/index.html",
@@ -216,8 +203,8 @@ async function verifyAuthFreeBundle(pluginRoot: string): Promise<void> {
 	];
 	for (const path of checkedFiles) {
 		const contents = await readFile(resolve(pluginRoot, path), "utf8");
-		for (const marker of LEGACY_AUTH_MARKERS) {
-			assert.equal(contents.includes(marker), false, `${path} still contains legacy auth marker ${marker}`);
+		for (const marker of LEGACY_CACHE_MARKERS) {
+			assert.equal(contents.includes(marker), false, `${path} still contains legacy cache marker ${marker}`);
 		}
 	}
 }

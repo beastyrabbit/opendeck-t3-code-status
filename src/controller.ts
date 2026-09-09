@@ -4,10 +4,13 @@ import {
 	type OpenDeckConnection,
 	type OpenDeckEvent,
 } from "./opendeck.js";
-import { getAccessibleTitle, renderDashboard } from "./render.js";
-import { T3ClientError, type T3ClientSnapshot } from "./t3-client.js";
+import { getAccessibleTitle, hasOpenQuestions, renderDashboard } from "./render.js";
+import type { T3ClientSnapshot } from "./t3-client.js";
+import { T3ClientError } from "./t3-error.js";
+import { LiveConnectionError } from "./t3-protocol.js";
 import {
 	ACTION_UUID,
+	type ActionSettings,
 	type ConnectionStatus,
 	type DashboardModel,
 	DEFAULT_REFRESH_SECONDS,
@@ -16,7 +19,7 @@ import {
 	SETTINGS_VERSION,
 } from "./types.js";
 
-const ANIMATION_INTERVAL_MS = 1_000;
+const ANIMATION_INTERVAL_MS = 500;
 const CONNECTION_STATUS_CACHE_MS = 1_000;
 const COMMAND_BURST_WINDOW_MS = 250;
 const ERROR_RETRY_INTERVAL_MS = 5_000;
@@ -24,6 +27,11 @@ const LEGACY_REFRESH_SECONDS = 15;
 const RING_PROGRESS_STEPS = 20;
 
 export interface T3StatusClient {
+	subscribe?(listener: () => void): () => void;
+	pair?(link: string, allowHttp: boolean): Promise<void>;
+	remove?(environmentId: string): Promise<void>;
+	reconnect?(): Promise<void>;
+	dispose?(): Promise<void>;
 	getConnectionStatus(): Promise<ConnectionStatus>;
 	getSnapshot(): Promise<T3ClientSnapshot>;
 }
@@ -37,6 +45,8 @@ interface VisibleContext {
 	context: string;
 	cycleStartedAt: number;
 	lastRenderedModel?: DashboardModel;
+	lastRenderedMode?: NormalizedSettings["displayMode"];
+	lastRenderedAlertPhase?: boolean;
 	lastRenderedProgressStep?: number;
 	lastRenderedTitle?: string;
 	model: DashboardModel;
@@ -67,6 +77,8 @@ export class T3CodeController {
 	private connectionStatusReportInFlight?: Promise<void>;
 	private connectionStatusReadAt = 0;
 	private disposed = false;
+	private unsubscribe?: () => void;
+	private authInFlight?: Promise<void>;
 	private lastConnectionError?: string;
 	private lastConnectionStatus: ConnectionStatus = { state: "offline" };
 	private refreshInFlight?: Promise<void>;
@@ -78,6 +90,13 @@ export class T3CodeController {
 	) {
 		this.animationIntervalMs = options.animationIntervalMs ?? ANIMATION_INTERVAL_MS;
 		this.now = options.now ?? Date.now;
+		this.unsubscribe = client.subscribe?.(() => {
+			if (this.disposed) return;
+			this.connectionStatusKnown = false;
+			this.scheduleRefresh(this.visibleContexts.keys(), true);
+			for (const context of this.inspectorContexts) this.pendingConnectionStatusContexts.add(context);
+			this.startConnectionStatusReports();
+		});
 	}
 
 	handle(event: OpenDeckEvent): void {
@@ -110,6 +129,8 @@ export class T3CodeController {
 	async dispose(): Promise<void> {
 		if (this.disposed) return;
 		this.disposed = true;
+		this.unsubscribe?.();
+		await this.client.dispose?.();
 		if (this.animationTimer) clearInterval(this.animationTimer);
 		this.animationTimer = undefined;
 		this.pendingRefresh.clear();
@@ -123,6 +144,7 @@ export class T3CodeController {
 			this.refreshInFlight,
 			this.connectionStatusInFlight,
 			this.connectionStatusReportInFlight,
+			this.authInFlight,
 		]);
 	}
 
@@ -198,6 +220,7 @@ export class T3CodeController {
 		const lastRefresh = this.lastForcedRefreshAt.get(context);
 		if (lastRefresh !== undefined && now - lastRefresh < COMMAND_BURST_WINDOW_MS) return;
 		this.lastForcedRefreshAt.set(context, now);
+		void this.client.reconnect?.();
 		this.scheduleRefresh([context], true);
 	}
 
@@ -224,6 +247,7 @@ export class T3CodeController {
 	}
 
 	private isDue(visible: VisibleContext, now: number): boolean {
+		if (this.client.subscribe) return false;
 		return now - visible.cycleStartedAt >= this.refreshIntervalMs(visible);
 	}
 
@@ -237,15 +261,30 @@ export class T3CodeController {
 		const visible = this.visibleContexts.get(context);
 		if (!visible) return;
 		const duration = this.refreshIntervalMs(visible);
-		const progress = Math.min(1, Math.max(0, (now - visible.cycleStartedAt) / duration));
+		const progress = this.client.subscribe
+			? visible.model.kind === "ready"
+				? 1
+				: 0
+			: Math.min(1, Math.max(0, (now - visible.cycleStartedAt) / duration));
 		const progressStep = Math.min(RING_PROGRESS_STEPS, Math.floor(progress * RING_PROGRESS_STEPS));
-		const title = getAccessibleTitle(visible.model);
+		const mode = visible.settings.displayMode;
+		const alertPhase =
+			mode !== "threads" && hasOpenQuestions(visible.model) && Math.floor(now / 500) % 2 === 0;
+		const title = getAccessibleTitle(visible.model, mode);
 		const imageChanged =
-			visible.lastRenderedModel !== visible.model || visible.lastRenderedProgressStep !== progressStep;
+			visible.lastRenderedModel !== visible.model ||
+			visible.lastRenderedProgressStep !== progressStep ||
+			visible.lastRenderedMode !== mode ||
+			visible.lastRenderedAlertPhase !== alertPhase;
 		if (imageChanged) {
 			visible.lastRenderedModel = visible.model;
 			visible.lastRenderedProgressStep = progressStep;
-			this.host.setImage(context, renderDashboard(visible.model, progressStep / RING_PROGRESS_STEPS));
+			visible.lastRenderedMode = mode;
+			visible.lastRenderedAlertPhase = alertPhase;
+			this.host.setImage(
+				context,
+				renderDashboard(visible.model, progressStep / RING_PROGRESS_STEPS, mode, alertPhase),
+			);
 		}
 		if (visible.lastRenderedTitle !== title) {
 			visible.lastRenderedTitle = title;
@@ -293,7 +332,9 @@ export class T3CodeController {
 			} catch (error) {
 				model = modelForClientError(error);
 				const code = clientErrorCode(error);
-				if (code === "offline") this.rememberConnectionStatus({ state: "offline" });
+				if (this.client.subscribe)
+					this.rememberConnectionStatus(await this.client.getConnectionStatus(), code);
+				else if (code === "offline") this.rememberConnectionStatus({ state: "offline" });
 				else this.rememberConnectionStatus(this.lastConnectionStatus, code);
 				this.broadcastConnectionStatus(this.lastConnectionStatus, false, this.lastConnectionError);
 			}
@@ -328,6 +369,56 @@ export class T3CodeController {
 	private handleInspectorCommand(event: OpenDeckEvent): void {
 		if (!event.context || !isRecord(event.payload) || typeof event.payload.command !== "string") return;
 		switch (event.payload.command) {
+			case "pair":
+			case "removeConnection": {
+				if (!this.trackInspectorContext(event.context)) return;
+				if (this.authInFlight) {
+					this.host.sendToPropertyInspector(ACTION_UUID, event.context, {
+						type: "pairingResult",
+						error: "busy",
+					});
+					return;
+				}
+				const payload = event.payload;
+				const context = event.context;
+				if (
+					payload.command === "pair" &&
+					(typeof payload.link !== "string" || payload.link.length > 16_384 || !this.client.pair)
+				)
+					return;
+				if (
+					payload.command === "removeConnection" &&
+					(typeof payload.environmentId !== "string" ||
+						payload.environmentId.length > 1024 ||
+						!this.client.remove)
+				)
+					return;
+				this.broadcastConnectionStatus(this.lastConnectionStatus, true);
+				this.authInFlight = (async () => {
+					let error: string | undefined;
+					try {
+						if (payload.command === "pair")
+							await this.client.pair?.(payload.link as string, payload.allowHttp === true);
+						else await this.client.remove?.(payload.environmentId as string);
+					} catch (cause) {
+						error = clientErrorCode(cause);
+					}
+					const status = await this.client.getConnectionStatus();
+					this.rememberConnectionStatus(status);
+					this.broadcastConnectionStatus(status, false);
+					if (!this.disposed)
+						this.host.sendToPropertyInspector(ACTION_UUID, context, {
+							type: "pairingResult",
+							...(error ? { error } : {}),
+						});
+					this.scheduleRefresh(this.visibleContexts.keys(), true);
+				})()
+					.catch(() => undefined)
+					.finally(() => {
+						this.authInFlight = undefined;
+					});
+				break;
+			}
 			case "getConnectionStatus": {
 				if (!this.trackInspectorContext(event.context)) return;
 				this.queueConnectionStatusReport(event.context);
@@ -438,31 +529,39 @@ export class T3CodeController {
 	}
 }
 
-function readSettings(payload: unknown): { refreshSeconds?: number; settingsVersion?: number } | undefined {
+function readSettings(payload: unknown): ActionSettings | undefined {
 	if (!isRecord(payload) || !isRecord(payload.settings)) return undefined;
 	const value = payload.settings.refreshSeconds;
 	const version = payload.settings.settingsVersion;
 	const refreshSeconds =
 		typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : undefined;
 	return {
+		displayMode: normalizeSettings({
+			displayMode: payload.settings.displayMode as ActionSettings["displayMode"],
+		}).displayMode,
 		...(refreshSeconds === undefined ? {} : { refreshSeconds }),
 		...(typeof version === "number" ? { settingsVersion: version } : {}),
 	};
 }
 
-function migrateSettings(settings: { refreshSeconds?: number; settingsVersion?: number } | undefined): {
-	refreshSeconds: number;
-	settingsVersion: number;
-} {
+function migrateSettings(
+	settings: ActionSettings | undefined,
+): NormalizedSettings & { settingsVersion: number } {
 	if (settings?.settingsVersion === SETTINGS_VERSION) {
 		return { ...normalizeSettings(settings), settingsVersion: SETTINGS_VERSION };
 	}
 	const refreshSeconds =
 		settings?.refreshSeconds === LEGACY_REFRESH_SECONDS ? DEFAULT_REFRESH_SECONDS : settings?.refreshSeconds;
-	return { ...normalizeSettings({ refreshSeconds }), settingsVersion: SETTINGS_VERSION };
+	return { ...normalizeSettings({ ...settings, refreshSeconds }), settingsVersion: SETTINGS_VERSION };
 }
 
 function modelForClientError(error: unknown): DashboardModel {
+	if (error instanceof LiveConnectionError) {
+		if (error.code === "pairing-required" || error.code === "authorization-required")
+			return { kind: "pairing" };
+		if (error.code === "connecting") return { kind: "loading" };
+		return { kind: error.code === "offline" ? "offline" : "error" };
+	}
 	if (!(error instanceof T3ClientError)) return { kind: "error" };
 	switch (error.code) {
 		case "offline":
@@ -473,7 +572,9 @@ function modelForClientError(error: unknown): DashboardModel {
 }
 
 function clientErrorCode(error: unknown): string {
-	return error instanceof T3ClientError ? error.code : "cache-read-failed";
+	return error instanceof T3ClientError || error instanceof LiveConnectionError
+		? error.code
+		: "invalid-response";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
