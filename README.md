@@ -1,5 +1,15 @@
 # T3 Code Status for OpenDeck
 
+
+
+## At a glance
+
+An OpenDeck key that shows how many T3 Code threads are currently working.
+
+![T3 Code Status key](plugin/icons/plugin.png)
+
+![T3 Code Status key](plugin/icons/plugin.png)
+
 T3 Code Status adds an OpenDeck key that shows how many open T3 Code threads are working. `4/7` means that four of seven open threads currently have T3's `Starting` or `Working` state. Status arrives through a live stream; a full ring means the stream is connected. Press the key to retry an offline connection.
 
 This is an unofficial community plugin. It is not part of T3 Code or OpenDeck.
