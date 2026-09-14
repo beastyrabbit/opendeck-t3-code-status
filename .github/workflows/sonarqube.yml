@@ -33,6 +33,11 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+          # The runner image has no UTF-8 locale; without it the scanner
+          # fails on non-ASCII file names.
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
+          SONAR_SCANNER_JAVA_OPTS: -Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8
         with:
           args: >
             -Dsonar.projectKey=beastyrabbit_opendeck-t3-code-status_884478c4-6b8e-4597-9628-2bfbaa136da2
