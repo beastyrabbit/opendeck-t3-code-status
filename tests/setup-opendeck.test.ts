@@ -157,7 +157,7 @@ test("setup dry-run reports and then migrates an earlier key without losing sett
 			const state = (owner.states as Array<Record<string, unknown>>)[0];
 			assert.deepEqual(
 				{ show: state?.show, size: state?.size, text: state?.text },
-				{ show: true, size: 0, text: "Loading T3 Code status" },
+				{ show: false, size: 0, text: "Loading T3 Code status" },
 			);
 		}
 		const profileFiles = await readdir(profileDirectory);

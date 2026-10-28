@@ -1,24 +1,28 @@
 import WebSocket from "ws";
 import { type ConnectionStore, FileConnectionStore, type SavedConnection } from "./connection-store.js";
 import { emptySummary, summarizeSnapshot } from "./status.js";
-import type { T3ClientSnapshot } from "./t3-client.js";
 import {
+	assertSupportedProtocol,
 	LiveConnectionError,
 	type LiveErrorCode,
 	MAX_ENVIRONMENTS,
 	MAX_RESPONSE_BYTES,
 	MAX_THREADS,
+	ORCHESTRATION_PROTOCOL_QUERY_PARAM,
+	ORCHESTRATION_PROTOCOL_VERSION,
 	parsePairingLink,
 	parseThread,
 	record,
 	sequence,
 	textValue,
 } from "./t3-protocol.js";
-import type { ConnectionStatus, EnvironmentStatus, T3ThreadShell } from "./types.js";
+import type { ConnectionStatus, EnvironmentStatus, T3ClientSnapshot, T3ThreadShell } from "./types.js";
 
 interface Environment {
 	saved: SavedConnection;
 	threads: Map<string, T3ThreadShell>;
+	/** Server-advertised shell capabilities from the latest environment descriptor. */
+	omitIdleSubagents?: boolean;
 	sequence?: number;
 	state: EnvironmentStatus["state"];
 	error?: LiveErrorCode;
@@ -109,6 +113,7 @@ export class T3LiveClient {
 			const descriptor = await this.request(target.origin, "/.well-known/t3/environment");
 			if (!record(descriptor) || !textValue(descriptor.environmentId))
 				throw new LiveConnectionError("invalid-response");
+			assertSupportedProtocol(descriptor);
 			if (!this.environments.has(descriptor.environmentId) && this.environments.size >= MAX_ENVIRONMENTS)
 				throw new LiveConnectionError("invalid-response");
 			const response = await this.request(target.origin, "/oauth/token", {
@@ -223,10 +228,16 @@ export class T3LiveClient {
 	}
 	async getSnapshot(): Promise<T3ClientSnapshot> {
 		const connectionStatus = await this.getConnectionStatus();
-		if (connectionStatus.state !== "connected")
+		if (connectionStatus.state !== "connected") {
+			const unsupported = [...this.environments.values()].some((env) => env.error === "unsupported-version");
 			throw new LiveConnectionError(
-				connectionStatus.state === "error" ? (this.loadError ?? "invalid-response") : connectionStatus.state,
+				connectionStatus.state === "error"
+					? (this.loadError ?? "invalid-response")
+					: connectionStatus.state === "offline" && unsupported
+						? "unsupported-version"
+						: connectionStatus.state,
 			);
+		}
 		const summary = emptySummary();
 		for (const env of this.environments.values()) {
 			const part = summarizeSnapshot(
@@ -300,6 +311,10 @@ export class T3LiveClient {
 			if (!current()) return;
 			if (!record(descriptor) || descriptor.environmentId !== env.saved.environmentId)
 				throw new LiveConnectionError("identity-mismatch");
+			assertSupportedProtocol(descriptor);
+			// Idle subagents never count, and live ones stay in the trimmed snapshot.
+			env.omitIdleSubagents =
+				record(descriptor.capabilities) && descriptor.capabilities.shellThreadFamilies === true;
 			const ticket = await this.request(
 				env.saved.origin,
 				"/api/auth/websocket-ticket",
@@ -312,6 +327,7 @@ export class T3LiveClient {
 			const url = new URL("/ws", env.saved.origin);
 			url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
 			url.searchParams.set("wsTicket", ticket.ticket);
+			url.searchParams.set(ORCHESTRATION_PROTOCOL_QUERY_PARAM, String(ORCHESTRATION_PROTOCOL_VERSION));
 			const socket = new WebSocket(url, {
 				handshakeTimeout: 10_000,
 				maxPayload: MAX_RESPONSE_BYTES,
@@ -326,7 +342,11 @@ export class T3LiveClient {
 				if (current())
 					this.fail(
 						env,
-						response.statusCode === 401 || response.statusCode === 403 ? "authorization-required" : "offline",
+						response.statusCode === 401 || response.statusCode === 403
+							? "authorization-required"
+							: response.statusCode === 426
+								? "unsupported-version"
+								: "offline",
 					);
 			});
 			socket.on("close", () => {
@@ -345,7 +365,7 @@ export class T3LiveClient {
 						_tag: "Request",
 						id: "shell",
 						tag: "orchestration.subscribeShell",
-						payload: {},
+						payload: env.omitIdleSubagents ? { omitIdleSubagents: true } : {},
 						headers: [],
 					}),
 				);
@@ -395,7 +415,11 @@ export class T3LiveClient {
 	}
 	private apply(env: Environment, item: unknown): void {
 		if (!record(item)) throw new Error();
+		// Sent only to clients that request completion markers; the snapshot already synchronizes.
+		if (item.kind === "synchronized") return;
 		if (item.kind === "snapshot") {
+			// Repository-identity refreshes carry project metadata with an empty thread list.
+			if ("resolvedRepositoryIdentityRoots" in item) return;
 			const snapshot = item.snapshot;
 			if (
 				!record(snapshot) ||
@@ -418,21 +442,24 @@ export class T3LiveClient {
 		if (!sequence(item.sequence) || env.sequence === undefined) throw new Error();
 		if (item.sequence <= env.sequence) return;
 		switch (item.kind) {
-			case "thread-upserted": {
+			case "thread.updated": {
 				const thread = parseThread(item.thread);
+				// The display never counts archived threads.
+				if (item.location === "archive") {
+					env.threads.delete(thread.id);
+					break;
+				}
 				if (!env.threads.has(thread.id) && env.threads.size >= MAX_THREADS) throw new Error();
 				env.threads.set(thread.id, thread);
 				break;
 			}
-			case "thread-removed":
+			case "thread.removed":
 				if (!textValue(item.threadId)) throw new Error();
-				env.threads.delete(item.threadId);
-				break;
-			case "project-upserted":
-			case "project-removed":
+				if (item.location !== "archive") env.threads.delete(item.threadId);
 				break;
 			default:
-				throw new Error();
+				// Project changes, and kinds added by newer servers, do not affect thread status.
+				break;
 		}
 		env.sequence = item.sequence;
 	}

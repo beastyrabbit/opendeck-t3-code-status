@@ -15,6 +15,7 @@ const inspectorHtml = await readFile(
 interface FakeElement {
 	addEventListener(name: string, listener: () => void): void;
 	emit(name: string): void;
+	replaceChildren(...children: unknown[]): void;
 	classList: { toggle(name: string, enabled: boolean): void };
 	dataset: Record<string, string>;
 	disabled: boolean;
@@ -41,12 +42,19 @@ function loadInspector() {
 		"connection-state",
 		"connection-detail",
 		"error-message",
+		"display-field",
+		"action-note",
 		"display-mode",
 		"display-note",
+		"theme",
 		"pairing-link",
 		"allow-http",
 		"pair-button",
+		"ssh-hosts",
+		"ssh-pair-button",
+		"ssh-find-button",
 		"pairing-result",
+		"ssh-result",
 		"environment-list",
 		"environment-detail",
 		"remove-connection",
@@ -62,8 +70,9 @@ function loadInspector() {
 				listeners.get(name)?.();
 			},
 			classList: { toggle: () => undefined },
+			replaceChildren: () => undefined,
 			dataset: {},
-			disabled: id === "display-mode",
+			disabled: id === "display-mode" || id === "theme",
 			get hidden() {
 				return hidden;
 			},
@@ -132,10 +141,12 @@ function loadInspector() {
 	const window: Record<string, unknown> = {};
 	runInNewContext(inspectorSource, {
 		document: {
+			createElement: () => ({}),
 			getElementById: (id: string) => elements.get(id),
 			querySelector: (selector: string) =>
 				selector === ".status-card" ? elements.get("status-card") : undefined,
 		},
+		URL,
 		WebSocket: FakeWebSocket,
 		window,
 	});
@@ -153,6 +164,45 @@ function loadInspector() {
 	};
 }
 
+test("Overview keys hide the display choice and talk to the plugin as their own action", () => {
+	const { connect, elements, socket } = loadInspector();
+	connect(
+		1234,
+		"pi-context",
+		"registerPropertyInspector",
+		"{}",
+		JSON.stringify({
+			action: "com.beastyrabbit.t3-code-status.overview-tile",
+			context: "key-a",
+			payload: { settings: { theme: "gauge" } },
+		}),
+	);
+	assert.equal(elements.get("display-field")?.hidden, true);
+	assert.equal(elements.get("action-note")?.hidden, false);
+	assert.match(elements.get("action-note")?.textContent ?? "", /four counts on one key/);
+	assert.equal(elements.get("theme")?.value, "gauge");
+	const connection = socket();
+	assert.ok(connection);
+	connection.open();
+	assert.equal(
+		JSON.parse(connection.sent.at(-1) ?? "").action,
+		"com.beastyrabbit.t3-code-status.overview-tile",
+	);
+});
+
+test("an unknown action shows the Thread status settings", () => {
+	const { connect, elements } = loadInspector();
+	connect(
+		1234,
+		"pi-context",
+		"registerPropertyInspector",
+		"{}",
+		JSON.stringify({ action: "constructor", context: "key-a", payload: { settings: {} } }),
+	);
+	assert.equal(elements.get("display-field")?.hidden, false);
+	assert.equal(elements.get("action-note")?.hidden, true);
+});
+
 test("display changes restore saved modes", () => {
 	const { connect, elements, socket } = loadInspector();
 	connect(
@@ -169,19 +219,40 @@ test("display changes restore saved modes", () => {
 	assert.ok(connection);
 	const mode = elements.get("display-mode");
 	assert.ok(mode);
+	const theme = elements.get("theme");
+	assert.ok(theme);
 	assert.equal(mode.disabled, true);
-	assert.equal(mode.value, "questions");
+	// Displays saved by earlier versions map to their new key types.
+	assert.equal(mode.value, "needs");
+	assert.equal(theme.value, "counter");
 	connection.open();
 	assert.equal(mode.disabled, false);
-	mode.value = "threads";
+	assert.equal(theme.disabled, false);
+	mode.value = "approval";
 	mode.emit("change");
 	assert.deepEqual(JSON.parse(connection.sent.at(-1) ?? ""), {
 		event: "setSettings",
 		context: "key-a",
-		payload: { displayMode: "threads", settingsVersion: 1 },
+		payload: { displayMode: "approval", theme: "counter", settingsVersion: 2 },
+	});
+	theme.value = "flood";
+	theme.emit("change");
+	assert.deepEqual(JSON.parse(connection.sent.at(-1) ?? "").payload, {
+		displayMode: "approval",
+		theme: "flood",
+		settingsVersion: 2,
+	});
+	theme.value = "unknown";
+	mode.value = "constructor";
+	mode.emit("change");
+	assert.deepEqual(JSON.parse(connection.sent.at(-1) ?? "").payload, {
+		displayMode: "combined",
+		theme: "counter",
+		settingsVersion: 2,
 	});
 	connection.emit("close");
 	assert.equal(mode.disabled, true);
+	assert.equal(theme.disabled, true);
 });
 
 test("the property inspector reports malformed or invalid action data", () => {
@@ -234,6 +305,87 @@ test("pairing sends a transient command, clears the secret, and keeps it out of 
 	mode.value = "questions";
 	mode.emit("change");
 	assert.doesNotMatch(connection.sent.at(-1) ?? "", /fixture|token|pairing/);
+});
+
+test("SSH pairing lists the paired remote machines, sends the hosts, and reports each machine", () => {
+	const { connect, elements, socket } = loadInspector();
+	connect(1234, "pi-context", "registerPropertyInspector", "{}", JSON.stringify({ context: "key-a" }));
+	const connection = socket();
+	assert.ok(connection);
+	connection.open();
+	const hosts = elements.get("ssh-hosts");
+	const button = elements.get("ssh-pair-button");
+	assert.ok(hosts);
+	assert.ok(button);
+	const status = (origins: string[]) =>
+		connection.emit("message", {
+			data: JSON.stringify({
+				event: "sendToPropertyInspector",
+				payload: {
+					type: "connectionStatus",
+					busy: false,
+					status: {
+						state: "connected",
+						connections: origins.map((origin, index) => ({
+							environmentId: `env-${index}`,
+							label: `Env ${index}`,
+							origin,
+							expiresAt: 0,
+							state: "connected",
+						})),
+					},
+				},
+			}),
+		});
+	status(["http://127.0.0.1:3773", "http://anvil:3773", "http://devbox:3774", "https://t3.example.com"]);
+	assert.equal(hosts.value, "anvil, devbox:3774");
+	hosts.value = "anvil, kiln";
+	hosts.emit("input");
+	status(["http://anvil:3773"]);
+	assert.equal(hosts.value, "anvil, kiln");
+	button.emit("click");
+	const message = JSON.parse(connection.sent.at(-1) ?? "");
+	assert.equal(message.payload.command, "pairSsh");
+	assert.equal(message.payload.hosts, "anvil, kiln");
+	assert.equal(button.disabled, true);
+	connection.emit("message", {
+		data: JSON.stringify({
+			event: "sendToPropertyInspector",
+			payload: { type: "pairingResult", hosts: [{ host: "anvil" }, { host: "kiln", error: "ssh-failed" }] },
+		}),
+	});
+	assert.equal(button.disabled, false);
+	assert.equal(elements.get("ssh-result")?.textContent, "Paired anvil.\nkiln: SSH login failed");
+});
+
+test("Find adds the T3 machines found on the tailnet to the SSH host list", () => {
+	const { connect, elements, socket } = loadInspector();
+	connect(1234, "pi-context", "registerPropertyInspector", "{}", JSON.stringify({ context: "key-a" }));
+	const connection = socket();
+	assert.ok(connection);
+	connection.open();
+	const hosts = elements.get("ssh-hosts");
+	const find = elements.get("ssh-find-button");
+	assert.ok(hosts);
+	assert.ok(find);
+	hosts.value = "anvil";
+	find.emit("click");
+	assert.equal(JSON.parse(connection.sent.at(-1) ?? "").payload.command, "discoverHosts");
+	assert.equal(find.disabled, true);
+	const result = (found: unknown) =>
+		connection.emit("message", {
+			data: JSON.stringify({
+				event: "sendToPropertyInspector",
+				payload: { type: "discoveryResult", hosts: found },
+			}),
+		});
+	result(["anvil", "kiln", "mac-mini"]);
+	assert.equal(find.disabled, false);
+	assert.equal(hosts.value, "anvil, kiln, mac-mini");
+	assert.equal(elements.get("ssh-result")?.textContent, "Found 3 machines. Press Pair all.");
+	result([]);
+	assert.equal(hosts.value, "anvil, kiln, mac-mini");
+	assert.match(elements.get("ssh-result")?.textContent ?? "", /^No T3 Code found on Tailscale/);
 });
 
 test("connection updates use one atomic live region for status, detail, and recovery guidance", () => {

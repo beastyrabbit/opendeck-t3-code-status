@@ -9,66 +9,93 @@
 		<script src="property-inspector.js" defer></script>
 	</head>
 	<body>
+		<!-- OpenDeck shows settings in a wide, short strip, so the groups sit side by side and stay short. -->
 		<main class="panel">
-			<header class="instrument-header">
-				<div class="status-dial" id="status-dial" data-state="loading" aria-hidden="true">
-					<svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
-						<circle class="dial-ticks" cx="24" cy="24" r="20" pathLength="48" />
-						<circle class="dial-ring" cx="24" cy="24" r="15.5" />
-						<path class="dial-hand" d="M24 24V12" />
-						<circle class="dial-pin" cx="24" cy="24" r="2.5" />
-					</svg>
+			<section class="group" aria-labelledby="display-heading">
+				<h2 class="group-title" id="display-heading">This key</h2>
+				<p class="field-note" id="action-note" hidden></p>
+				<div id="display-field">
+				<label class="field-label" for="display-mode">Shows</label>
+				<select id="display-mode" aria-describedby="display-note" disabled>
+					<option value="combined">Combined status</option>
+					<optgroup label="One status">
+						<option value="working">Working threads</option>
+						<option value="needs">Needs you (all requests)</option>
+						<option value="approval">Approvals</option>
+						<option value="question">Questions</option>
+						<option value="plan">Plan reviews</option>
+						<option value="failed">Failed threads</option>
+						<option value="limit">Usage limits</option>
+						<option value="background">Background tasks</option>
+						<option value="waiting">Waiting threads</option>
+					</optgroup>
+				</select>
+				<p class="field-note" id="display-note" aria-live="polite">Shows whatever is most urgent right now.</p>
 				</div>
-				<div>
-					<p class="product-mark">T3 CODE</p>
-					<h1>Thread status</h1>
-				</div>
-			</header>
+				<label class="field-label" for="theme">Theme</label>
+				<select id="theme" disabled>
+					<option value="counter">Counter: big number and colour band</option>
+					<option value="pictogram">Pictogram: icon and count</option>
+					<option value="flood">Flood: whole key lights up</option>
+					<option value="gauge">Gauge: ring per thread</option>
+					<option value="quad">Quad: four counters</option>
+				</select>
+			</section>
 
-			<section class="status-card" aria-labelledby="connection-heading">
+			<section class="group status-card" aria-labelledby="connection-heading">
 				<div class="status-card__top">
-					<p class="section-label" id="connection-heading">Live T3 connection</p>
+					<div class="status-dial" id="status-dial" data-state="loading" aria-hidden="true">
+						<svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+							<circle class="dial-ticks" cx="24" cy="24" r="20" pathLength="48" />
+							<circle class="dial-ring" cx="24" cy="24" r="15.5" />
+							<path class="dial-hand" d="M24 24V12" />
+							<circle class="dial-pin" cx="24" cy="24" r="2.5" />
+						</svg>
+					</div>
+					<h2 class="group-title" id="connection-heading">Connection</h2>
 					<span class="status-light" id="status-light" data-state="loading" aria-hidden="true"></span>
 				</div>
 				<div id="connection-announcement" role="status" aria-live="polite" aria-atomic="true">
 					<p class="connection-state" id="connection-state">Connecting</p>
-					<p class="connection-detail" id="connection-detail">
-						Checking your paired environments.
-					</p>
+					<p class="connection-detail" id="connection-detail">Checking your paired environments.</p>
 					<p class="error-message" id="error-message" hidden></p>
 				</div>
+				<label class="field-label" for="pairing-link">Pair with a link</label>
+				<div class="inline-row">
+					<input id="pairing-link" type="password" autocomplete="off" spellcheck="false" maxlength="16384" placeholder="Paste a read-only pairing link" disabled />
+					<button id="pair-button" type="button" disabled>Pair</button>
+				</div>
+				<label class="check-option"><input id="allow-http" type="checkbox" disabled /> Allow plain HTTP outside Tailscale</label>
+				<p id="pairing-result" class="field-note result" role="status" aria-live="polite"></p>
 			</section>
 
-			<section class="control-section" aria-labelledby="pair-heading">
-				<label class="section-label" id="pair-heading" for="pairing-link">Pair an environment</label>
-				<p class="field-note">In T3 Code, open Settings → Connections, enable Network access if needed, and create a Read only pairing link. Paste the complete link below.</p>
-				<input id="pairing-link" type="password" autocomplete="off" spellcheck="false" maxlength="16384" placeholder="Paste read-only pairing link" disabled />
-				<label class="field-note http-option"><input id="allow-http" type="checkbox" disabled /> Allow unencrypted HTTP on my trusted private network</label>
-				<button id="pair-button" type="button" disabled>Pair / replace authorization</button>
-				<p id="pairing-result" class="field-note" role="status" aria-live="polite"></p>
-				<p class="field-note">Pair once per environment for all keys. A new link for the same environment replaces its saved authorization. After T3's 30-day authorization expires, reconnecting requires a fresh link. An existing stream may stay connected longer.</p>
-				<p class="field-note">Read only also permits access to files and conversations. This plugin requests only the thread status stream.</p>
-				<label class="section-label" for="environment-list">Paired environments</label>
-				<select id="environment-list" disabled><option value="">No paired environments</option></select>
+			<section class="group" aria-labelledby="ssh-heading">
+				<h2 class="group-title" id="ssh-heading">Pair machines over SSH</h2>
+				<p class="field-note" id="ssh-note">Find your T3 machines on Tailscale, then pair them all. Press Pair all again to renew.</p>
+				<label class="field-label" for="ssh-hosts">Machines</label>
+				<input id="ssh-hosts" type="text" autocomplete="off" spellcheck="false" maxlength="4096" placeholder="studio, buildbox, devbox" aria-describedby="ssh-note" disabled />
+				<div class="inline-row">
+					<button id="ssh-find-button" type="button" disabled>Find</button>
+					<button id="ssh-pair-button" type="button" class="primary" disabled>Pair all</button>
+				</div>
+				<p id="ssh-result" class="field-note result" role="status" aria-live="polite"></p>
+			</section>
+
+			<section class="group" aria-labelledby="environments-heading">
+				<h2 class="group-title" id="environments-heading">Paired environments</h2>
+				<label class="field-label" for="environment-list">Environment</label>
+				<div class="inline-row">
+					<select id="environment-list" disabled><option value="">No paired environments</option></select>
+					<button id="remove-connection" type="button" disabled>Forget</button>
+				</div>
 				<p id="environment-detail" class="field-note"></p>
-				<button id="remove-connection" type="button" disabled>Forget selected environment</button>
-				<p class="field-note">Forgetting removes the credential from this plugin. Revoke its access in T3 Settings → Connections.</p>
+				<details class="help">
+					<summary>How pairing works</summary>
+					<p class="field-note">Each machine needs its own read-only pairing. All keys share it.</p>
+					<p class="field-note">Pairings expire after 30 days. Pair again to renew.</p>
+					<p class="field-note">Forget removes a pairing from this plugin only.</p>
+				</details>
 			</section>
-
-			<section class="control-section" aria-labelledby="display-heading">
-				<label class="section-label" id="display-heading" for="display-mode">Key display</label>
-				<select id="display-mode" aria-describedby="display-note" disabled>
-					<option value="combined">Threads + questions</option>
-					<option value="threads">Threads only</option>
-					<option value="questions">Questions only</option>
-				</select>
-				<p class="field-note" id="display-note" aria-live="polite">
-					Shows thread counts and a blinking question mark when input, approval, or plan review is pending.
-				</p>
-				<p class="field-note">For separate keys, add Thread status twice and choose a different display on each.</p>
-			</section>
-
-			<p class="field-note">Status updates arrive live. Press a key to retry an offline connection. A full ring means the stream is connected.</p>
 		</main>
 	</body>
 </html>

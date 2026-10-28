@@ -9,9 +9,15 @@ import {
 	type OpenDeckConnection,
 	type OpenDeckEvent,
 } from "../src/opendeck.js";
-import { T3ClientError, type T3ClientSnapshot } from "../src/t3-client.js";
+import { renderKey } from "../src/render.js";
 import { LiveConnectionError } from "../src/t3-protocol.js";
-import { ACTION_UUID, type ConnectionStatus, type ThreadSummary } from "../src/types.js";
+import {
+	ACTION_UUID,
+	type ConnectionStatus,
+	OVERVIEW_ACTION_UUID,
+	type T3ClientSnapshot,
+	type ThreadSummary,
+} from "../src/types.js";
 
 interface ImageCall {
 	context: string;
@@ -117,7 +123,10 @@ test("live updates reach every display immediately and interval ticks do not pol
 	};
 	update();
 	await flushMicrotasks();
-	assert.equal(host.titles.at(-1)?.title, "Pair T3 Code in the OpenDeck key settings");
+	assert.equal(
+		host.titles.at(-1)?.title,
+		"T3 Code authorization expired. Pair again in the OpenDeck key settings",
+	);
 	await controller.dispose();
 	assert.equal(unsubscribed, true);
 });
@@ -129,12 +138,16 @@ function summary(overrides: Partial<ThreadSummary> = {}): ThreadSummary {
 		attention: 2,
 		approval: 0,
 		input: 0,
+		limited: 0,
 		failed: 0,
 		starting: 0,
 		working: 4,
 		monitoring: 0,
 		plan: 0,
 		waiting: 2,
+		background: 0,
+		blocked: 0,
+		unseen: 0,
 		...overrides,
 	};
 }
@@ -184,7 +197,7 @@ function useMockedIntervals(context: TestContext): void {
 	context.mock.timers.enable({ apis: ["setInterval"] });
 }
 
-test("keys blink independently of the refresh ring and stop after answers, mode changes, or removal", async (context) => {
+test("request keys blink and stop after answers, mode changes, or removal", async (context) => {
 	useMockedIntervals(context);
 	let now = 0;
 	const host = new FakeHost();
@@ -192,39 +205,40 @@ test("keys blink independently of the refresh ring and stop after answers, mode 
 	client.onGetSummary = async () => summary({ input: 1, waiting: 1 });
 	const controller = new T3CodeController(host, client, { now: () => now });
 	context.after(() => controller.dispose());
-	for (const displayMode of ["combined", "threads", "questions"]) {
+	for (const displayMode of ["combined", "working", "needs"]) {
 		controller.handle(
-			event("willAppear", displayMode, { settings: { displayMode, refreshSeconds: 60, settingsVersion: 1 } }),
+			event("willAppear", displayMode, { settings: { displayMode, refreshSeconds: 60, settingsVersion: 2 } }),
 		);
 	}
 	await flushMicrotasks();
 	const initial = Object.fromEntries(
-		["combined", "threads", "questions"].map((mode) => [mode, latestSvg(host, mode)]),
+		["combined", "working", "needs"].map((mode) => [mode, latestSvg(host, mode)]),
 	);
 	const titleCount = host.titles.length;
 	const readCount = client.getSummaryCalls;
 	now = 500;
 	context.mock.timers.tick(500);
 	assert.notEqual(latestSvg(host, "combined"), initial.combined);
-	assert.notEqual(latestSvg(host, "questions"), initial.questions);
-	assert.equal(latestSvg(host, "threads"), initial.threads);
+	assert.notEqual(latestSvg(host, "needs"), initial.needs);
+	assert.equal(latestSvg(host, "working"), initial.working);
 	assert.equal(host.titles.length, titleCount);
 	assert.equal(client.getSummaryCalls, readCount);
 	controller.handle(
 		event("didReceiveSettings", "combined", {
-			settings: { displayMode: "threads", refreshSeconds: 60, settingsVersion: 1 },
+			settings: { displayMode: "working", refreshSeconds: 60, settingsVersion: 2 },
 		}),
 	);
-	assert.equal(latestSvg(host, "combined"), initial.threads);
+	assert.equal(latestSvg(host, "combined"), initial.working);
 	client.onGetSummary = async () => summary();
-	controller.handle(event("keyUp", "questions"));
+	controller.handle(event("keyUp", "needs"));
 	await flushMicrotasks();
-	const cleared = latestSvg(host, "questions");
-	assert.match(cleared, /opacity="0.12">\?/);
+	const cleared = latestSvg(host, "needs");
+	assert.match(cleared, /^<svg[^>]*><rect width="144" height="144" rx="17" fill="#0E141A"/);
+	assert.match(cleared, />0<\/text>/);
 	now = 1_000;
 	context.mock.timers.tick(500);
-	assert.equal(latestSvg(host, "questions"), cleared);
-	for (const key of ["combined", "threads", "questions"]) controller.handle(event("willDisappear", key));
+	assert.equal(latestSvg(host, "needs"), cleared);
+	for (const key of ["combined", "working", "needs"]) controller.handle(event("willDisappear", key));
 	const imageCount = host.images.length;
 	now = 10_000;
 	context.mock.timers.tick(9_000);
@@ -247,16 +261,16 @@ test("willAppear renders loading immediately and then the fetched summary", asyn
 	assert.equal(client.getSummaryCalls, 1);
 	assert.equal(host.images.length, 1);
 	assert.deepEqual(host.titles, [{ context: "key-a", title: "Loading T3 Code status" }]);
-	assert.match(latestSvg(host, "key-a"), />···<\/text>/);
-	assert.match(latestSvg(host, "key-a"), />LOADING<\/text>/);
+	assert.doesNotMatch(latestSvg(host, "key-a"), /<text/);
+	assert.match(latestSvg(host, "key-a"), /<circle[^>]*fill="#48C8F5"/);
 
 	pending.resolve(summary());
 	await flushMicrotasks();
 
 	assert.equal(host.images.length, 2);
 	assert.deepEqual(host.titles.at(-1), { context: "key-a", title: "4 of 6 working, 2 waiting" });
-	assert.match(latestSvg(host, "key-a"), />4\/6<\/text>/);
-	assert.match(latestSvg(host, "key-a"), />2 WAITING<\/text>/);
+	assert.match(latestSvg(host, "key-a"), />4<\/text>/);
+	assert.match(latestSvg(host, "key-a"), />6<\/text>/);
 });
 
 test("willAppear migrates the old 15-second default to 60 seconds once", async (context) => {
@@ -271,7 +285,10 @@ test("willAppear migrates the old 15-second default to 60 seconds once", async (
 	await flushMicrotasks();
 
 	assert.deepEqual(host.settings, [
-		{ context: "key-a", settings: { displayMode: "combined", refreshSeconds: 60, settingsVersion: 1 } },
+		{
+			context: "key-a",
+			settings: { displayMode: "combined", theme: "counter", refreshSeconds: 60, settingsVersion: 2 },
+		},
 	]);
 	now = 15_000;
 	context.mock.timers.tick(15_000);
@@ -298,8 +315,8 @@ test("visible contexts share an in-flight status fetch", async (context) => {
 	await flushMicrotasks();
 
 	assert.equal(client.getSummaryCalls, 1);
-	assert.match(latestSvg(host, "key-a"), />2\/2<\/text>/);
-	assert.match(latestSvg(host, "key-b"), />2\/2<\/text>/);
+	assert.match(latestSvg(host, "key-a"), />2<\/text>/);
+	assert.equal(latestSvg(host, "key-b"), latestSvg(host, "key-a"));
 });
 
 test("keyUp during an in-flight poll queues a second fetch and renders its response", async (context) => {
@@ -320,15 +337,17 @@ test("keyUp during an in-flight poll queues a second fetch and renders its respo
 	await flushMicrotasks();
 
 	assert.equal(client.getSummaryCalls, 2);
-	assert.match(latestSvg(host, "key-a"), />0\/1<\/text>/);
+	assert.match(latestSvg(host, "key-a"), />0<\/text>/);
+	assert.match(latestSvg(host, "key-a"), />1<\/text>/);
+	assert.equal(host.titles.at(-1)?.title, "0 of 1 working, 1 waiting");
 
 	second.resolve(summary({ total: 9, running: 9, attention: 0, working: 9, waiting: 0 }));
 	await keyUp;
 	await flushMicrotasks();
 
 	assert.equal(client.getSummaryCalls, 2);
-	assert.match(latestSvg(host, "key-a"), />9\/9<\/text>/);
-	assert.match(latestSvg(host, "key-a"), />ALL WORKING<\/text>/);
+	assert.match(latestSvg(host, "key-a"), />9<\/text>/);
+	assert.equal(host.titles.at(-1)?.title, "9 of 9 threads working");
 });
 
 test("a burst of key presses queues at most one follow-up refresh and later input recovers", async (context) => {
@@ -436,13 +455,11 @@ test("the interval refreshes only when due, keyUp refreshes now, and disappearan
 	now = 2_500;
 	context.mock.timers.tick(500);
 	assert.equal(client.getSummaryCalls, 1);
-	assert.match(latestSvg(host, "key-a"), /stroke-dashoffset="191\.64"/);
 
 	now = 5_000;
 	context.mock.timers.tick(500);
 	assert.equal(client.getSummaryCalls, 2);
 	await flushMicrotasks();
-	assert.match(latestSvg(host, "key-a"), /stroke-dashoffset="383\.27"/);
 
 	now = 5_100;
 	await controller.handle(event("keyUp", "key-a"));
@@ -464,8 +481,8 @@ test("offline and error states retry after five seconds then resume the configur
 	const host = new FakeHost();
 	const client = new FakeClient();
 	client.onGetSummary = async () => {
-		if (client.getSummaryCalls === 1) throw new T3ClientError("offline");
-		if (client.getSummaryCalls === 2) throw new T3ClientError("cache-read-failed");
+		if (client.getSummaryCalls === 1) throw new LiveConnectionError("offline");
+		if (client.getSummaryCalls === 2) throw new LiveConnectionError("invalid-response");
 		return summary({ total: 7, running: 7, attention: 0, working: 7, waiting: 0 });
 	};
 	const controller = new T3CodeController(host, client, { now: () => now });
@@ -512,7 +529,7 @@ test("a failed shared read starts one bounded retry window for every visible con
 	const host = new FakeHost();
 	const client = new FakeClient();
 	client.onGetSummary = async () => {
-		if (client.getSummaryCalls === 3) throw new T3ClientError("offline");
+		if (client.getSummaryCalls === 3) throw new LiveConnectionError("offline");
 		return summary();
 	};
 	const controller = new T3CodeController(host, client, { now: () => now });
@@ -555,7 +572,7 @@ test("a forced recovery restarts the configured interval for every recovered con
 
 	controller.handle(event("willAppear", "key-a", { settings: { refreshSeconds: 60, settingsVersion: 1 } }));
 	controller.handle(event("willAppear", "key-b", { settings: { refreshSeconds: 5, settingsVersion: 1 } }));
-	initial.reject(new T3ClientError("offline"));
+	initial.reject(new LiveConnectionError("offline"));
 	await flushMicrotasks();
 	assert.equal(client.getSummaryCalls, 1);
 
@@ -576,7 +593,7 @@ test("a forced recovery restarts the configured interval for every recovered con
 	assert.equal(client.getSummaryCalls, 3);
 });
 
-test("the timer ring is quantized and skips identical image renders", async (context) => {
+test("ticks skip identical image renders", async (context) => {
 	useMockedIntervals(context);
 	let now = 0;
 	const host = new FakeHost();
@@ -599,34 +616,33 @@ test("the timer ring is quantized and skips identical image renders", async (con
 
 	now = 3_000;
 	context.mock.timers.tick(1_000);
-	assert.equal(host.images.length, 3);
+	assert.equal(host.images.length, 2);
 	assert.equal(host.titles.length, 2);
-	assert.match(latestSvg(host, "key-a"), /stroke-dashoffset="364\.11"/);
 });
 
 describe("client error display", () => {
 	const cases: Array<{ error: unknown; expected: RegExp; name: string; title: string }> = [
 		{
-			error: new T3ClientError("offline"),
+			error: new LiveConnectionError("offline"),
 			expected: />OFF<\/text>/,
 			name: "offline",
 			title: "T3 Code offline",
 		},
 		{
-			error: new T3ClientError("cache-unavailable"),
-			expected: />ERR<\/text>/,
-			name: "unavailable cache",
-			title: "T3 Code status error",
+			error: new LiveConnectionError("unsupported-version"),
+			expected: />VERSION<\/text>/,
+			name: "unsupported T3 version",
+			title: "Unsupported T3 Code version",
 		},
 		{
-			error: new T3ClientError("cache-read-failed"),
-			expected: />ERR<\/text>/,
-			name: "cache read failure",
+			error: new LiveConnectionError("invalid-response"),
+			expected: />ERROR<\/text>/,
+			name: "invalid response",
 			title: "T3 Code status error",
 		},
 		{
 			error: new Error("unexpected"),
-			expected: />ERR<\/text>/,
+			expected: />ERROR<\/text>/,
 			name: "unknown failure",
 			title: "T3 Code status error",
 		},
@@ -808,6 +824,25 @@ test("a successful automatic refresh updates an open inspector connection card",
 	assert.equal(client.getConnectionStatusCalls, 0);
 });
 
+test("Overview keys always draw the overview, whatever their saved display mode", async (context) => {
+	useMockedIntervals(context);
+	const host = new FakeHost();
+	const client = new FakeClient();
+	const controller = new T3CodeController(host, client, { now: () => 1_000 });
+	context.after(() => controller.dispose());
+	await controller.handle({
+		action: OVERVIEW_ACTION_UUID,
+		context: "overview-a",
+		event: "willAppear",
+		payload: { settings: { displayMode: "failed", theme: "gauge", settingsVersion: 2 } },
+	});
+	await flushMicrotasks();
+	assert.equal(
+		host.images.findLast((call) => call.context === "overview-a")?.image,
+		renderKey({ kind: "ready", refreshedAt: 0, summary: summary() }, "overview", "gauge"),
+	);
+});
+
 test("events for another action and events after disposal have no effect", async () => {
 	const host = new FakeHost();
 	const client = new FakeClient();
@@ -850,5 +885,78 @@ test("concurrent pairing commands get a busy response and never write credential
 	await flushMicrotasks();
 	assert.doesNotMatch(JSON.stringify(host.settings), /fixture|token/);
 	assert.doesNotMatch(JSON.stringify(host.inspectorMessages), /fixture/);
+	await controller.dispose();
+});
+
+test("SSH pairing pairs every host it can and reports each one without leaking the links", async () => {
+	const host = new FakeHost();
+	const client = new FakeClient() as FakeClient & T3StatusClient;
+	const paired: Array<{ link: string; allowHttp: boolean }> = [];
+	client.pair = async (link, allowHttp) => {
+		if (link.includes("devbox")) throw new LiveConnectionError("offline");
+		paired.push({ link, allowHttp });
+	};
+	const issued: string[] = [];
+	const controller = new T3CodeController(host, client, {
+		isEncryptedNetwork: async () => false,
+		issuePairingLink: async (target) => {
+			issued.push(target);
+			if (target === "mac") throw new LiveConnectionError("ssh-failed");
+			return `http://${target}:3773/pair#token=fixture-${target}`;
+		},
+	});
+	controller.handle(
+		event("sendToPlugin", "key-a", { command: "pairSsh", hosts: "anvil, mac, devbox", allowHttp: true }),
+	);
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.deepEqual(issued, ["anvil", "mac", "devbox"]);
+	assert.deepEqual(paired, [{ link: "http://anvil:3773/pair#token=fixture-anvil", allowHttp: true }]);
+	const result = host.inspectorMessages.find(
+		(message) => (message.payload as { type?: string }).type === "pairingResult",
+	);
+	assert.deepEqual(result?.payload, {
+		type: "pairingResult",
+		hosts: [{ host: "anvil" }, { host: "mac", error: "ssh-failed" }, { host: "devbox", error: "offline" }],
+	});
+	assert.doesNotMatch(JSON.stringify(host.inspectorMessages), /fixture/);
+
+	controller.handle(event("sendToPlugin", "key-a", { command: "pairSsh", hosts: "-oProxyCommand=x" }));
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.deepEqual(host.inspectorMessages.at(-1)?.payload, { type: "pairingResult", error: "invalid-host" });
+	assert.equal(issued.length, 3);
+	await controller.dispose();
+});
+
+test("tailnet discovery reports found hosts, and tailnet hosts pair over HTTP without the opt-in", async () => {
+	const host = new FakeHost();
+	const client = new FakeClient() as FakeClient & T3StatusClient;
+	const paired: Array<{ link: string; allowHttp: boolean }> = [];
+	client.pair = async (link, allowHttp) => {
+		paired.push({ link, allowHttp });
+	};
+	let discoveries = 0;
+	const controller = new T3CodeController(host, client, {
+		discoverHosts: async () => {
+			discoveries += 1;
+			return ["anvil", "kiln"];
+		},
+		isEncryptedNetwork: async (hostname) => hostname === "anvil",
+		issuePairingLink: async (target) => `http://${target}/pair#token=fixture`,
+	});
+	controller.handle(event("sendToPlugin", "key-a", { command: "discoverHosts" }));
+	controller.handle(event("sendToPlugin", "key-a", { command: "discoverHosts" }));
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(discoveries, 1);
+	assert.deepEqual(host.inspectorMessages.at(-1)?.payload, {
+		type: "discoveryResult",
+		hosts: ["anvil", "kiln"],
+	});
+
+	controller.handle(event("sendToPlugin", "key-a", { command: "pairSsh", hosts: "anvil:3774, kiln" }));
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.deepEqual(
+		paired.map((entry) => entry.allowHttp),
+		[true, false],
+	);
 	await controller.dispose();
 });

@@ -2,6 +2,25 @@
 
 All notable changes to T3 Code Status are recorded here.
 
+## Unreleased
+
+- Redesign the keys for 2 cm displays: one large number or symbol per key, and a distinct shape for every status colour.
+- Add separate key types for working threads, all requests, approvals, questions, plan reviews, failures, usage limits, background tasks, and waiting threads. Existing "Threads only" and "Questions only" keys become Working and Needs you keys.
+- Add five themes for every key type: Counter, Pictogram, Flood, Gauge, and Quad.
+- Add an **Overview** action: one key that shows running threads (and how many of them only wait), requests for you, finished threads you have not opened yet, and errors at once, in every theme. It never blinks. The Quad theme's Thread status key now switches to the most urgent state like the other themes.
+- The Thread status key shows finished threads you have not opened yet, after requests, failures, and usage limits. Background tasks are now grey; cyan marks finished, unseen threads.
+- Add **Pair machines over SSH**: one button creates a read-only pairing token on each listed machine through `ssh` and its `t3` command and pairs it, without showing the token. Pressing it again renews every expired authorization.
+- Add **Find**, which lists the machines on your Tailscale network that run T3 Code. Hosts on Tailscale addresses pair over HTTP without the unencrypted-HTTP opt-in.
+- **Pair all** reaches Tailscale devices through the matching SSH alias, finds `t3` in `~/.local/bin` and `~/.t3/bin`, and pairs Windows machines through the T3 Code app's own CLI.
+- Lay out the key settings side by side for OpenDeck's wide settings strip, with larger text and the pairing notes folded away.
+- Show distinct PAIR, RE-PAIR, and VERSION states for missing pairing, expired authorization, and unsupported T3 versions.
+
+- Support T3 Code 0.1 and its orchestration protocol 2. The plugin declares the protocol when it connects and parses the V2 thread shell stream. Earlier plugin builds cannot read T3 Code 0.1 and show an error.
+- Derive working, approval, question, plan, failure, and background states with the same rules as T3 Code's client. Usage-limit pauses are tracked separately, and a live subagent's approval now flags its parent thread.
+- Leave settlement to T3 Code's server-side auto-settlement instead of applying a local three-day rule.
+- Report an unsupported T3 version distinctly instead of a generic connection error.
+- Remove the unused local-cache reader and its `snappyjs` dependency.
+
 ## 0.2.1
 
 - Read T3 Code caches that use V8 serialization format 16 while retaining support for format 15.

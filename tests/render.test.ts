@@ -1,269 +1,232 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { getAccessibleTitle, getDisplay, hasOpenQuestions, renderDashboard } from "../src/render.js";
-import type { DashboardModel, ThreadSummary } from "../src/types.js";
+import { getAccessibleTitle, isAlerting, renderKey } from "../src/render.js";
+import { emptySummary } from "../src/status.js";
+import { type DashboardModel, DISPLAY_MODES, THEMES, type ThreadSummary } from "../src/types.js";
 
 function summary(overrides: Partial<ThreadSummary> = {}): ThreadSummary {
-	return {
-		total: 0,
-		running: 0,
-		attention: 0,
-		approval: 0,
-		input: 0,
-		failed: 0,
-		starting: 0,
-		working: 0,
-		monitoring: 0,
-		plan: 0,
-		waiting: 0,
-		...overrides,
-	};
+	return { ...emptySummary(), ...overrides };
 }
 
-describe("getDisplay", () => {
-	test("shows the running fraction and waiting count", () => {
-		assert.deepEqual(
-			getDisplay({
-				kind: "ready",
-				refreshedAt: 0,
-				summary: summary({ total: 6, running: 4, attention: 2, waiting: 2, working: 4 }),
-			}),
-			{ accent: "#CBCB78", count: "4/6", footer: "2 WAITING", label: "T3 CODE" },
-		);
+function ready(overrides: Partial<ThreadSummary> = {}): DashboardModel {
+	return { kind: "ready", refreshedAt: 0, summary: summary(overrides) };
+}
+
+function svg(image: string): string {
+	assert.match(image, /^data:image\/svg\+xml;base64,/);
+	return Buffer.from(image.slice(image.indexOf(",") + 1), "base64").toString("utf8");
+}
+
+const CALM = ready({
+	total: 7,
+	running: 3,
+	working: 3,
+	waiting: 3,
+	monitoring: 1,
+	attention: 4,
+	background: 1,
+});
+const BUSY = ready({
+	total: 13,
+	running: 4,
+	working: 4,
+	approval: 1,
+	input: 2,
+	plan: 1,
+	failed: 1,
+	limited: 1,
+	waiting: 3,
+	attention: 9,
+	background: 2,
+});
+const CONNECTIONS: DashboardModel[] = [
+	{ kind: "loading" },
+	{ kind: "offline" },
+	{ kind: "pairing" },
+	{ kind: "reauth" },
+	{ kind: "unsupported" },
+	{ kind: "error" },
+];
+
+describe("renderKey", () => {
+	test("every theme draws every key type and connection state with plain SVG primitives", () => {
+		for (const theme of THEMES) {
+			for (const mode of [...DISPLAY_MODES, "overview"] as const) {
+				for (const model of [CALM, BUSY, ready(), ...CONNECTIONS]) {
+					for (const phase of [false, true]) {
+						const document = svg(renderKey(model, mode, theme, phase));
+						assert.match(document, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" width="144" height="144"/);
+						const tags = new Set([...document.matchAll(/<([a-z]+)/g)].map((match) => match[1]));
+						for (const tag of tags)
+							assert.ok(
+								["svg", "rect", "circle", "path", "line", "polygon", "text"].includes(tag ?? ""),
+								tag,
+							);
+						assert.doesNotMatch(document, /NaN|undefined/, `${theme} ${mode} ${model.kind}`);
+					}
+				}
+			}
+		}
 	});
 
-	test("puts failures ahead of all other attention states", () => {
-		assert.deepEqual(
-			getDisplay({
-				kind: "ready",
-				refreshedAt: 0,
-				summary: summary({
-					total: 4,
-					running: 1,
-					attention: 3,
-					failed: 1,
-					approval: 1,
-					waiting: 1,
-					working: 1,
-				}),
-			}),
-			{
-				accent: "#FF9269",
-				count: "1/4",
-				footer: "1 ERROR",
-				footerAccent: "#FF667D",
-				label: "T3 CODE",
-			},
-		);
+	test("connection states name what the user should do", () => {
+		for (const theme of THEMES) {
+			assert.match(svg(renderKey({ kind: "offline" }, "combined", theme)), />OFF<\/text>/);
+			assert.match(svg(renderKey({ kind: "pairing" }, "working", theme)), />PAIR<\/text>/);
+			assert.match(svg(renderKey({ kind: "reauth" }, "needs", theme)), />RE-PAIR<\/text>/);
+			assert.match(svg(renderKey({ kind: "unsupported" }, "failed", theme)), />VERSION<\/text>/);
+			assert.match(svg(renderKey({ kind: "error" }, "combined", theme)), />ERROR<\/text>/);
+		}
 	});
 
-	test("uses singular and plural copy for direct attention", () => {
-		assert.equal(
-			getDisplay({
-				kind: "ready",
-				refreshedAt: 0,
-				summary: summary({ total: 1, attention: 1, input: 1 }),
-			}).footer,
-			"1 NEEDS YOU",
-		);
-		assert.equal(
-			getDisplay({
-				kind: "ready",
-				refreshedAt: 0,
-				summary: summary({ total: 2, attention: 2, approval: 1, plan: 1 }),
-			}).footer,
-			"2 NEED YOU",
-		);
+	test("the combined counter shows the most urgent count with the open total", () => {
+		const calm = svg(renderKey(CALM, "combined", "counter"));
+		assert.match(calm, />3<\/text>/);
+		assert.match(calm, />7<\/text>/);
+		assert.match(calm, /fill="#4CE08A"/);
+		const busy = svg(renderKey(BUSY, "combined", "counter"));
+		assert.match(busy, />4<\/text>/);
+		assert.match(busy, />13<\/text>/);
+		assert.match(busy, /fill="#FFC83D"/);
+		const failed = svg(renderKey(ready({ total: 2, running: 1, failed: 1 }), "combined", "counter"));
+		assert.match(failed, /fill="#FF5A6E"/);
+		const limited = svg(renderKey(ready({ total: 2, limited: 2 }), "combined", "counter"));
+		assert.match(limited, /fill="#B48CFF"/);
 	});
 
-	test("handles an empty dashboard and a fully running dashboard", () => {
-		assert.deepEqual(getDisplay({ kind: "ready", refreshedAt: 0, summary: summary() }), {
-			accent: "#6F858E",
-			count: "0/0",
-			footer: "NO THREADS",
-			label: "T3 CODE",
+	test("the blink frame floods a key that needs the user, and no other", () => {
+		const steady = svg(renderKey(BUSY, "needs", "counter", false));
+		const flash = svg(renderKey(BUSY, "needs", "counter", true));
+		assert.match(steady, /^<svg[^>]*><rect width="144" height="144" rx="17" fill="#0E141A"/);
+		assert.match(flash, /^<svg[^>]*><rect width="144" height="144" rx="17" fill="#FFC83D"/);
+		assert.equal(renderKey(BUSY, "working", "counter", true), renderKey(BUSY, "working", "counter", false));
+		assert.equal(renderKey(CALM, "needs", "counter", true), renderKey(CALM, "needs", "counter", false));
+	});
+
+	test("single-status keys show their own count", () => {
+		assert.match(svg(renderKey(BUSY, "question", "flood")), />2<\/text>/);
+		assert.match(svg(renderKey(BUSY, "background", "pictogram")), />2<\/text>/);
+		assert.match(svg(renderKey(BUSY, "waiting", "quad")), />3<\/text>/);
+		assert.match(svg(renderKey(BUSY, "working", "flood")), />\/13<\/text>/);
+	});
+
+	test("the Overview key shows running with its waiting part, needs you, done not seen, and errors", () => {
+		const state = ready({
+			total: 15,
+			running: 14,
+			working: 14,
+			blocked: 3,
+			approval: 1,
+			input: 1,
+			waiting: 1,
+			unseen: 1,
+			failed: 1,
+			limited: 1,
 		});
-		assert.deepEqual(
-			getDisplay({
-				kind: "ready",
-				refreshedAt: 0,
-				summary: summary({ total: 6, running: 6, working: 6 }),
-			}),
-			{ accent: "#63E6BE", count: "6/6", footer: "ALL WORKING", label: "T3 CODE" },
+		for (const theme of THEMES) {
+			const key = svg(renderKey(state, "overview", theme));
+			// Gauge draws the waiting part as a grey stretch of the ring instead of a number.
+			for (const count of theme === "gauge" ? [14, 2, 1] : [14, 3, 2, 1])
+				assert.match(key, new RegExp(`>${count}</text>`), `${theme} ${count}`);
+		}
+		const quad = svg(renderKey(state, "overview", "quad"));
+		for (const [count, color] of [
+			[14, "#4CE08A"],
+			[3, "#97A5B0"],
+			[2, "#FFC83D"],
+			[1, "#48C8F5"],
+			[2, "#FF5A6E"],
+		] as const)
+			assert.match(quad, new RegExp(`fill="${color}"[^>]*>${count}</text>`), `${count} ${color}`);
+		assert.doesNotMatch(
+			svg(renderKey(ready({ total: 2, running: 2, working: 2 }), "overview", "quad")),
+			/#97A5B0/,
 		);
 	});
 
-	test("interpolates the running ratio from red through yellow to green", () => {
-		const cases = [
-			{ expected: "#FF667D", running: 0, total: 7 },
-			{ expected: "#FFBE55", running: 1, total: 2 },
-			{ expected: "#90DBA0", running: 6, total: 7 },
-			{ expected: "#63E6BE", running: 7, total: 7 },
-		];
-
-		for (const { expected, running, total } of cases) {
-			const attention = total - running;
-			assert.equal(
-				getDisplay({
-					kind: "ready",
-					refreshedAt: 0,
-					summary: summary({ attention, running, total, waiting: attention, working: running }),
-				}).accent,
-				expected,
-			);
-		}
+	test("the Thread status key shows unseen finished threads before running ones", () => {
+		const key = svg(
+			renderKey(ready({ total: 5, running: 4, working: 4, waiting: 1, unseen: 1 }), "combined", "counter"),
+		);
+		assert.match(key, /fill="#48C8F5"[^>]*>1<\/text>/);
+		assert.equal(
+			getAccessibleTitle(ready({ total: 5, running: 4, working: 4, waiting: 1, unseen: 1 })),
+			"4 of 5 working, 1 done, not seen",
+		);
 	});
 
-	test("maps connection states to short key labels", () => {
-		const cases: Array<[DashboardModel, ReturnType<typeof getDisplay>]> = [
-			[{ kind: "loading" }, { accent: "#51D7E8", count: "···", footer: "LOADING", label: "T3 CODE" }],
-			[{ kind: "offline" }, { accent: "#6F858E", count: "OFF", footer: "T3 OFFLINE", label: "T3 CODE" }],
-			[{ kind: "error" }, { accent: "#FF667D", count: "ERR", footer: "STATUS ERROR", label: "T3 CODE" }],
-		];
+	test("the Overview key never blinks", () => {
+		for (const theme of THEMES)
+			assert.equal(
+				renderKey(BUSY, "overview", theme, true),
+				renderKey(BUSY, "overview", theme, false),
+				theme,
+			);
+	});
 
-		for (const [model, expected] of cases) {
-			assert.deepEqual(getDisplay(model), expected);
-		}
+	test("every theme's Thread status key switches to the most urgent state", () => {
+		const quad = svg(renderKey(BUSY, "combined", "quad"));
+		assert.match(quad, /fill="#FFC83D"[^>]*>4<\/text>/);
+		assert.doesNotMatch(quad, />13<\/text>/);
+		assert.match(svg(renderKey(ready({ total: 5, waiting: 5 }), "combined", "quad")), />5<\/text>/);
+	});
+
+	test("themes look different", () => {
+		const images = new Set(THEMES.map((theme) => renderKey(BUSY, "combined", theme)));
+		assert.equal(images.size, THEMES.length);
+	});
+});
+
+describe("isAlerting", () => {
+	test("only request keys blink, and only while requests are pending", () => {
+		assert.equal(isAlerting(BUSY, "combined"), true);
+		assert.equal(isAlerting(BUSY, "needs"), true);
+		assert.equal(isAlerting(BUSY, "approval"), true);
+		assert.equal(isAlerting(BUSY, "plan"), true);
+		assert.equal(isAlerting(BUSY, "working"), false);
+		assert.equal(isAlerting(BUSY, "failed"), false);
+		assert.equal(isAlerting(BUSY, "overview"), false);
+		assert.equal(isAlerting(CALM, "overview"), false);
+		assert.equal(isAlerting(CALM, "combined"), false);
+		assert.equal(isAlerting(ready({ total: 1, input: 1 }), "approval"), false);
+		assert.equal(isAlerting({ kind: "offline" }, "needs"), false);
 	});
 });
 
 describe("getAccessibleTitle", () => {
-	test("describes connection states and an empty dashboard", () => {
-		assert.equal(getAccessibleTitle({ kind: "loading" }), "Loading T3 Code status");
-		assert.equal(getAccessibleTitle({ kind: "offline" }), "T3 Code offline");
-		assert.equal(getAccessibleTitle({ kind: "error" }), "T3 Code status error");
+	test("describes the combined state", () => {
+		assert.equal(getAccessibleTitle(ready()), "No open T3 Code threads");
+		assert.equal(getAccessibleTitle(ready({ total: 3, running: 3 })), "3 of 3 threads working");
+		assert.equal(getAccessibleTitle(CALM), "3 of 7 working, 4 waiting");
 		assert.equal(
-			getAccessibleTitle({ kind: "ready", refreshedAt: 0, summary: summary() }),
-			"No open T3 Code threads",
+			getAccessibleTitle(BUSY),
+			"4 of 13 working, 1 error, 4 need your attention, 1 paused by a usage limit",
 		);
 	});
 
-	test("describes working, waiting, attention, and error counts", () => {
-		const cases: Array<[Partial<ThreadSummary>, string]> = [
-			[{ total: 1, running: 1, working: 1 }, "1 of 1 thread working"],
-			[{ total: 6, running: 6, working: 6 }, "6 of 6 threads working"],
-			[{ total: 6, running: 4, attention: 2, waiting: 2, working: 4 }, "4 of 6 working, 2 waiting"],
-			[
-				{ total: 2, running: 1, attention: 1, approval: 1, working: 1 },
-				"1 of 2 working, 1 needs your attention",
-			],
-			[{ total: 2, attention: 2, failed: 2 }, "0 of 2 working, 2 errors"],
-		];
-		for (const [overrides, expected] of cases) {
-			assert.equal(
-				getAccessibleTitle({ kind: "ready", refreshedAt: 0, summary: summary(overrides) }),
-				expected,
-			);
-		}
+	test("describes each single-status key", () => {
+		assert.equal(getAccessibleTitle(BUSY, "working"), "4 of 13 threads working");
+		assert.equal(getAccessibleTitle(BUSY, "needs"), "4 threads need your input, approval, or plan review");
+		assert.equal(getAccessibleTitle(CALM, "needs"), "No T3 Code questions pending");
+		assert.equal(getAccessibleTitle(BUSY, "approval"), "1 thread needs your approval");
+		assert.equal(getAccessibleTitle(BUSY, "question"), "2 threads ask you a question");
+		assert.equal(getAccessibleTitle(BUSY, "plan"), "1 plan is ready for review");
+		assert.equal(getAccessibleTitle(BUSY, "failed"), "1 thread failed");
+		assert.equal(getAccessibleTitle(BUSY, "limit"), "1 thread is paused by a usage limit");
+		assert.equal(getAccessibleTitle(BUSY, "background"), "2 threads have background tasks");
+		assert.equal(getAccessibleTitle(BUSY, "waiting"), "3 threads are waiting");
 	});
-});
 
-function decodeSvg(dataUrl: string): string {
-	const prefix = "data:image/svg+xml;base64,";
-	assert.ok(dataUrl.startsWith(prefix));
-	return Buffer.from(dataUrl.slice(prefix.length), "base64").toString("utf8");
-}
-
-test("question alerts cover input, approvals and plans but exclude waiting and failures", () => {
-	for (const state of ["input", "approval", "plan", "waiting", "failed", "monitoring"] as const) {
-		const model: DashboardModel = {
-			kind: "ready",
-			refreshedAt: 0,
-			summary: summary({ total: 1, [state]: 1 }),
-		};
-		const alerts = ["input", "approval", "plan"].includes(state);
-		assert.equal(hasOpenQuestions(model), alerts);
-		const bright = decodeSvg(renderDashboard(model, 0, "questions", true));
-		const dim = decodeSvg(renderDashboard(model, 0, "questions", false));
-		assert.equal(bright !== dim, alerts);
-		if (alerts) {
-			assert.match(bright, /<rect[^>]*fill="#FFBE55"/);
-			assert.match(dim, /<rect[^>]*fill="#071014"/);
-			assert.match(bright, />1 NEEDS YOU<\/text>/);
-		} else {
-			assert.match(bright, /opacity="0.12">\?<\/text>/);
-			assert.match(bright, />NO QUESTIONS<\/text>/);
-		}
-	}
-});
-
-test("combined alerts retain thread counts and thread-only mode never blinks", () => {
-	const empty: DashboardModel = { kind: "ready", refreshedAt: 0, summary: summary({ total: 0, running: 0 }) };
-	assert.equal(getDisplay(empty, "threads").accent, "#6F858E");
-	const model: DashboardModel = {
-		kind: "ready",
-		refreshedAt: 0,
-		summary: summary({ total: 6, running: 4, input: 1, failed: 1 }),
-	};
-	const combined = decodeSvg(renderDashboard(model, 0, "combined", true));
-	assert.match(combined, />\?<\/text>/);
-	assert.match(combined, />4\/6<\/text>/);
-	assert.match(combined, />1 NEEDS YOU<\/text>/);
-	assert.notEqual(combined, decodeSvg(renderDashboard(model, 0, "combined", false)));
-	const threads = renderDashboard(model, 0, "threads", true);
-	assert.equal(threads, renderDashboard(model, 0, "threads", false));
-	assert.doesNotMatch(decodeSvg(threads), />\?<\/text>|NEEDS YOU|ERROR/);
-	assert.match(getAccessibleTitle(model, "combined"), /1 error, 1 need your attention/);
-	assert.equal(getAccessibleTitle(model, "threads"), "4 of 6 threads working");
-	assert.match(getAccessibleTitle(model, "questions"), /1 thread needs your input/);
-});
-
-test("every mode shows connection failures instead of a question or a false all-clear", () => {
-	for (const kind of ["loading", "offline", "error"] as const) {
-		for (const mode of ["combined", "threads", "questions"] as const) {
-			assert.equal(renderDashboard({ kind }, 0, mode, true), renderDashboard({ kind }, 0, mode, false));
-			assert.doesNotMatch(decodeSvg(renderDashboard({ kind }, 0, mode)), />\?<\/text>|NO QUESTIONS/);
-			assert.equal(getAccessibleTitle({ kind }, mode), getAccessibleTitle({ kind }));
-		}
-	}
-});
-
-test("renderDashboard returns a self-contained 144-pixel SVG", () => {
-	const model: DashboardModel = {
-		kind: "ready",
-		refreshedAt: 0,
-		summary: summary({ total: 6, running: 4, attention: 2, waiting: 2, working: 4 }),
-	};
-	const svg = decodeSvg(renderDashboard(model, 0.25));
-
-	assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" width="144" height="144"/);
-	assert.match(svg, />4\/6<\/text>/);
-	assert.match(svg, />2 WAITING<\/text>/);
-	assert.match(svg, /stroke-dasharray="383\.27"/);
-	assert.match(svg, /stroke-dashoffset="287\.46"/);
-	assert.match(svg, /<circle cx="133\.00" cy="72\.00" r="3\.5" fill="#CBCB78"\/>/);
-	assert.equal(svg.endsWith("</svg>"), true);
-});
-
-test("renderDashboard clamps ring progress at both ends", () => {
-	const low = decodeSvg(renderDashboard({ kind: "loading" }, -10));
-	const high = decodeSvg(renderDashboard({ kind: "loading" }, 10));
-
-	assert.match(low, /stroke-dashoffset="383\.27"/);
-	assert.match(low, /<circle cx="72\.00" cy="11\.00" r="3\.5"/);
-	assert.match(high, /stroke-dashoffset="0\.00"/);
-	assert.match(high, /<circle cx="72\.00" cy="11\.00" r="3\.5"/);
-});
-
-test("renderDashboard scales large counts and long footer copy to stay inside the key", () => {
-	const model: DashboardModel = {
-		kind: "ready",
-		refreshedAt: 0,
-		summary: summary({ total: 160_000, attention: 160_000, failed: 160_000 }),
-	};
-	const svg = decodeSvg(renderDashboard(model, 0));
-	assert.match(svg, /font-size="14" font-weight="800" letter-spacing="-2">0\/160000/);
-	assert.match(svg, /font-size="10" font-weight="800" letter-spacing="0\.3">160000 ERRORS/);
-});
-
-test("renderDashboard keeps failures red independently of a healthy running ratio", () => {
-	const model: DashboardModel = {
-		kind: "ready",
-		refreshedAt: 0,
-		summary: summary({ total: 7, running: 6, attention: 1, failed: 1, working: 6 }),
-	};
-	const svg = decodeSvg(renderDashboard(model, 0.5));
-	assert.match(svg, /<circle cx="72" cy="72" r="61" fill="none" stroke="#90DBA0"/);
-	assert.match(svg, /fill="#FF667D"[^>]*>1 ERROR<\/text>/);
+	test("describes connection states", () => {
+		assert.equal(getAccessibleTitle({ kind: "loading" }), "Loading T3 Code status");
+		assert.equal(getAccessibleTitle({ kind: "offline" }), "T3 Code offline");
+		assert.equal(getAccessibleTitle({ kind: "pairing" }), "Pair T3 Code in the OpenDeck key settings");
+		assert.equal(
+			getAccessibleTitle({ kind: "reauth" }),
+			"T3 Code authorization expired. Pair again in the OpenDeck key settings",
+		);
+		assert.equal(getAccessibleTitle({ kind: "unsupported" }), "Unsupported T3 Code version");
+		assert.equal(getAccessibleTitle({ kind: "error" }), "T3 Code status error");
+	});
 });

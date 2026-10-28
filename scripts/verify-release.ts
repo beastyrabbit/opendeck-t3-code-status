@@ -185,12 +185,12 @@ async function verifyManifest(path: string, expectedVersion: string): Promise<vo
 			{
 				FontSize: 0,
 				Image: "icons/action",
-				ShowTitle: true,
+				ShowTitle: false,
 				Title: "Loading T3 Code status",
 				TitleAlignment: "middle",
 			},
 		],
-		"manifest must expose dynamic status text without drawing a second visible title",
+		"manifest must keep the dynamic status text without drawing it over the key image",
 	);
 }
 

@@ -10,7 +10,12 @@ export type LiveErrorCode =
 	| "storage-error"
 	| "offline"
 	| "connecting"
-	| "busy";
+	| "busy"
+	| "unsupported-version"
+	| "invalid-host"
+	| "ssh-failed"
+	| "t3-missing"
+	| "t3-failed";
 export class LiveConnectionError extends Error {
 	constructor(readonly code: LiveErrorCode) {
 		super(code);
@@ -20,6 +25,15 @@ export class LiveConnectionError extends Error {
 export const MAX_ENVIRONMENTS = 16;
 export const MAX_THREADS = 50_000;
 export const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+/** T3 rejects WebSocket clients that do not declare this orchestration protocol. */
+export const ORCHESTRATION_PROTOCOL_VERSION = 2;
+export const ORCHESTRATION_PROTOCOL_QUERY_PARAM = "orchestrationProtocol";
+
+/** Rejects environments that do not speak the orchestration protocol this plugin understands. */
+export function assertSupportedProtocol(descriptor: Record<string, unknown>): void {
+	if (descriptor.orchestrationProtocolVersion !== ORCHESTRATION_PROTOCOL_VERSION)
+		throw new LiveConnectionError("unsupported-version");
+}
 
 export function record(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -63,60 +77,75 @@ export function parsePairingLink(link: string, allowHttp = false): { origin: str
 
 // Retain only fields used by the status display, never conversation or file data.
 export function parseThread(value: unknown): T3ThreadShell {
+	const invalid = () => new LiveConnectionError("invalid-response");
 	if (
 		!record(value) ||
 		!textValue(value.id) ||
-		!["hasPendingApprovals", "hasPendingUserInput", "hasActionableProposedPlan"].every(
-			(key) => typeof value[key] === "boolean",
-		)
-	) {
-		throw new LiveConnectionError("invalid-response");
-	}
+		!textValue(value.status, 64) ||
+		typeof value.hasActionableProposedPlan !== "boolean" ||
+		!record(value.lineage)
+	)
+		throw invalid();
 	const date = (v: unknown): string | null => {
 		if (v == null) return null;
-		if (typeof v !== "string" || !Number.isFinite(Date.parse(v)))
-			throw new LiveConnectionError("invalid-response");
+		if (typeof v !== "string" || !Number.isFinite(Date.parse(v))) throw invalid();
 		return v;
 	};
-	const session = value.session;
-	const turn = value.latestTurn;
-	if (session != null && (!record(session) || !textValue(session.status, 64)))
-		throw new LiveConnectionError("invalid-response");
-	if (
-		turn != null &&
-		(!record(turn) || !["running", "interrupted", "completed", "error"].includes(String(turn.state)))
-	)
-		throw new LiveConnectionError("invalid-response");
+	const id = (v: unknown): string | null => {
+		if (v == null) return null;
+		if (!textValue(v)) throw invalid();
+		return v;
+	};
+	const lineage = value.lineage;
+	const request = value.pendingRuntimeRequest;
+	if (request != null && (!record(request) || !textValue(request.kind, 128))) throw invalid();
+	const tasks = value.pendingBackgroundTasks ?? [];
+	if (!Array.isArray(tasks) || tasks.length > 1_000) throw invalid();
+	const activity = value.activityRunStatus;
+	if (activity != null && !textValue(activity, 64)) throw invalid();
+	const guests = value.pendingGuestMessageCount ?? 0;
+	if (!sequence(guests)) throw invalid();
+	const updatedAt = date(value.updatedAt);
+	if (updatedAt === null) throw invalid();
 	return {
 		id: value.id,
+		parentThreadId: id(lineage.parentThreadId),
+		relationshipToParent:
+			lineage.relationshipToParent === "fork" || lineage.relationshipToParent === "subagent"
+				? lineage.relationshipToParent
+				: null,
+		creationSource: textValue(value.creationSource, 64) ? value.creationSource : null,
 		interactionMode: value.interactionMode === "plan" ? "plan" : "default",
+		status: value.status,
+		...(activity === undefined ? {} : { activityRunStatus: (activity as string | null) ?? null }),
+		latestRunId: id(value.latestRunId),
+		latestRunCompletedAt: date(value.latestRunCompletedAt),
+		activeProviderThreadId: id(value.activeProviderThreadId),
+		pendingRuntimeRequest: record(request)
+			? {
+					kind: request.kind as string,
+					...(typeof request.blocking === "boolean" ? { blocking: request.blocking } : {}),
+				}
+			: null,
+		pendingGuestMessageCount: guests,
+		hasActionableProposedPlan: value.hasActionableProposedPlan,
+		pendingBackgroundTasks: tasks.map((task: unknown) => {
+			if (!record(task) || !textValue(task.kind, 64)) throw invalid();
+			return { kind: task.kind, awaited: task.awaited === true };
+		}),
+		limitRecovery: record(value.limitRecovery),
+		updatedAt,
 		archivedAt: date(value.archivedAt),
-		createdAt: date(value.createdAt),
-		settledAt: date(value.settledAt),
+		deletedAt: date(value.deletedAt),
 		settledOverride:
 			value.settledOverride === "settled" || value.settledOverride === "active"
 				? value.settledOverride
 				: null,
-		latestUserMessageAt: date(value.latestUserMessageAt),
 		snoozedAt: date(value.snoozedAt),
 		snoozedUntil: date(value.snoozedUntil),
-		hasPendingApprovals: value.hasPendingApprovals as boolean,
-		hasPendingUserInput: value.hasPendingUserInput as boolean,
-		hasActionableProposedPlan: value.hasActionableProposedPlan as boolean,
-		backgroundLiveness:
-			value.backgroundLiveness === "working" || value.backgroundLiveness === "monitoring"
-				? value.backgroundLiveness
-				: null,
-		session: record(session)
-			? { status: session.status as string, updatedAt: date(session.updatedAt) ?? undefined }
-			: null,
-		latestTurn: record(turn)
-			? {
-					state: turn.state as "running" | "interrupted" | "completed" | "error",
-					requestedAt: date(turn.requestedAt),
-					startedAt: date(turn.startedAt),
-					completedAt: date(turn.completedAt),
-				}
-			: null,
+		...(value.lastVisitedAt === undefined ? {} : { lastVisitedAt: date(value.lastVisitedAt) }),
+		...(typeof value.blockedOnThreadWait === "boolean"
+			? { blockedOnThreadWait: value.blockedOnThreadWait }
+			: {}),
 	};
 }
