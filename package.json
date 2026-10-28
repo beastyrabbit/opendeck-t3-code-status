@@ -15,6 +15,7 @@
 		"build": "tsx scripts/build.ts",
 		"check": "tsc --noEmit",
 		"deploy": "pnpm build && tsx scripts/deploy-opendeck.ts",
+		"docs:images": "tsx scripts/docs-images.ts",
 		"format": "biome format --write .",
 		"lint": "biome check .",
 		"package": "tsx scripts/package.ts",

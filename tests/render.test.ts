@@ -111,7 +111,7 @@ describe("renderKey", () => {
 		assert.match(svg(renderKey(BUSY, "working", "flood")), />\/13<\/text>/);
 	});
 
-	test("the Overview key shows running with its waiting part, needs you, done not seen, and errors", () => {
+	test("the Overview key shows active and waiting runs, needs you, done not seen, and errors", () => {
 		const state = ready({
 			total: 15,
 			running: 14,
@@ -126,13 +126,14 @@ describe("renderKey", () => {
 		});
 		for (const theme of THEMES) {
 			const key = svg(renderKey(state, "overview", theme));
+			// 14 running, 3 of them waiting: the big number shows the 11 active ones.
 			// Gauge draws the waiting part as a grey stretch of the ring instead of a number.
-			for (const count of theme === "gauge" ? [14, 2, 1] : [14, 3, 2, 1])
+			for (const count of theme === "gauge" ? [11, 2, 1] : [11, 3, 2, 1])
 				assert.match(key, new RegExp(`>${count}</text>`), `${theme} ${count}`);
 		}
 		const quad = svg(renderKey(state, "overview", "quad"));
 		for (const [count, color] of [
-			[14, "#4CE08A"],
+			[11, "#4CE08A"],
 			[3, "#97A5B0"],
 			[2, "#FFC83D"],
 			[1, "#48C8F5"],
@@ -143,6 +144,17 @@ describe("renderKey", () => {
 			svg(renderKey(ready({ total: 2, running: 2, working: 2 }), "overview", "quad")),
 			/#97A5B0/,
 		);
+		// When every running thread only waits, the cell stays lit with a dim zero.
+		for (const theme of THEMES) {
+			const allWaiting = svg(
+				renderKey(ready({ total: 2, running: 2, working: 2, blocked: 2 }), "overview", theme),
+			);
+			assert.match(allWaiting, /#4CE08A/, `${theme} lit`);
+			const zero = allWaiting.match(/fill="(#[0-9A-F]{6})"[^>]*>0<\/text>/)?.[1];
+			assert.ok(zero, `${theme} zero`);
+			// Full-contrast count colours: green, white, and the ink on a lit Flood cell.
+			assert.ok(!["#4CE08A", "#F2F6F8", "#0B1116"].includes(zero), `${theme} zero is dim, not ${zero}`);
+		}
 	});
 
 	test("the Thread status key shows unseen finished threads before running ones", () => {

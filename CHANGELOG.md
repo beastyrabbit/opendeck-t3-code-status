@@ -2,6 +2,11 @@
 
 All notable changes to T3 Code Status are recorded here.
 
+## Unreleased
+
+- The Overview key's running cell now shows the actively working threads as its big number, next to the ⏸ count of those that only wait. The two add up to the running total instead of the waiting count reading as extra threads.
+- Move the user guide into `docs/user/` with pictures of every key type, theme, and connection state, rendered from the plugin itself. Add developer documentation in `docs/dev/`.
+
 ## 0.4.0
 
 - Redesign the keys for 2 cm displays: one large number or symbol per key, and a distinct shape for every status colour.

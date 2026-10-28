@@ -388,13 +388,16 @@ const band = (fill: string) =>
 
 // ---------- overview key: four counts in fixed cells ----------
 
-/** One cell; `waiting` is the part of a running count that only waits. */
+/**
+ * One cell. For running threads, `count` is the active ones and `waiting` the rest, so the two
+ * add up to the running total instead of reading as one count inside the other.
+ */
 type Cell = (x: number, y: number, status: StatusKey, count: number, waiting: number) => string;
 
-/** Running (with its waiting part) and needs you on top, done but not seen and errors below. */
+/** Running (active, plus those that only wait) and needs you on top, done but not seen and errors below. */
 function overviewKey(summary: ThreadSummary, cell: Cell): string {
 	const cells: Array<[StatusKey, number, number]> = [
-		["working", summary.running, summary.blocked],
+		["working", summary.running - summary.blocked, summary.blocked],
 		["needs", needsCount(summary), 0],
 		["unseen", summary.unseen, 0],
 		["failed", summary.failed + summary.limited, 0],
@@ -459,7 +462,7 @@ const counter: ThemeRenderer = {
 	overview(summary) {
 		return overviewKey(summary, (x, y, status, count, waiting) => {
 			const color = STATUS[status].color;
-			const lit = count > 0;
+			const lit = count + waiting > 0;
 			const bandFill = lit ? color : C.well;
 			let svg = `<rect x="${x}" y="${y + 46}" width="65" height="19" rx="6" fill="${bandFill}"/>`;
 			svg += glyph(STATUS[status].glyph, x + 12, y + 55.5, 13, lit ? C.ink : C.dim, bandFill);
@@ -468,7 +471,7 @@ const counter: ThemeRenderer = {
 					glyph("pause", x + 38, y + 55.5, 12, C.ink, bandFill) +
 					text(x + 55, y + 55.5 + 0.365 * 15, String(waiting), numeralSize(waiting, 15, 15), C.ink);
 			const size = numeralSize(count, 40, 32);
-			return svg + text(x + 32.5, y + 23 + 0.365 * size, String(count), size, lit ? color : C.dim);
+			return svg + text(x + 32.5, y + 23 + 0.365 * size, String(count), size, count > 0 ? color : C.dim);
 		});
 	},
 };
@@ -543,7 +546,7 @@ const pictogram: ThemeRenderer = {
 	overview(summary) {
 		return overviewKey(summary, (x, y, status, count, waiting) => {
 			const color = STATUS[status].color;
-			const lit = count > 0;
+			const lit = count + waiting > 0;
 			let svg = glyph(
 				STATUS[status].glyph,
 				x + (waiting > 0 ? 22 : 32.5),
@@ -556,7 +559,7 @@ const pictogram: ThemeRenderer = {
 					glyph("pause", x + 51, y + 16, 14, C.grey) +
 					text(x + 51, y + 33 + 0.365 * 14, String(waiting), numeralSize(waiting, 14, 14), C.grey);
 			const size = numeralSize(count, 24, 22);
-			return svg + text(x + 32.5, y + 54 + 0.365 * size, String(count), size, lit ? C.white : C.dim);
+			return svg + text(x + 32.5, y + 54 + 0.365 * size, String(count), size, count > 0 ? C.white : C.dim);
 		});
 	},
 };
@@ -609,7 +612,7 @@ const flood: ThemeRenderer = {
 	overview(summary) {
 		return overviewKey(summary, (x, y, status, count, waiting) => {
 			const color = STATUS[status].color;
-			if (count === 0)
+			if (count + waiting === 0)
 				return `<rect x="${x}" y="${y}" width="65" height="65" rx="9" fill="${C.key}" stroke="${C.well}" stroke-width="2"/>${glyph(STATUS[status].glyph, x + 32.5, y + 32.5, 24, mix(color, C.key, 0.55))}`;
 			let svg = `<rect x="${x}" y="${y}" width="65" height="65" rx="9" fill="${color}"/>`;
 			svg += glyph(STATUS[status].glyph, x + 13, y + 13, 14, C.ink, color);
@@ -619,8 +622,9 @@ const flood: ThemeRenderer = {
 					text(x + 60, y + 13 + 0.365 * 15, String(waiting), 15, C.ink, { anchor: "end" });
 			const size = numeralSize(count, 46, 38);
 			const two = String(count).length >= 2;
+			const ink = count > 0 ? C.ink : mix(C.ink, color, 0.55);
 			return (
-				svg + text(x + (two ? 34.5 : 37.5), y + (two ? 41 : 39) + 0.365 * size, String(count), size, C.ink)
+				svg + text(x + (two ? 34.5 : 37.5), y + (two ? 41 : 39) + 0.365 * size, String(count), size, ink)
 			);
 		});
 	},
@@ -772,18 +776,18 @@ const gauge: ThemeRenderer = {
 	overview(summary) {
 		return overviewKey(summary, (x, y, status, count, waiting) => {
 			const color = STATUS[status].color;
-			const lit = count > 0;
+			const lit = count + waiting > 0;
 			const circle: Circle = { cx: x + 32.5, cy: y + 32.5, r: 26, width: 7 };
 			let svg = arc(circle, 0, 360, C.well);
 			if (lit && summary.total > 0) {
-				const span = 360 * Math.min(1, count / summary.total);
-				const active = (span * (count - waiting)) / count;
+				const span = 360 * Math.min(1, (count + waiting) / summary.total);
+				const active = (span * count) / (count + waiting);
 				svg += arc(circle, -90, active, color);
 				// The waiting part of the running count continues the arc in grey.
 				if (waiting > 0) svg += arc(circle, -90 + active, span - active, C.grey);
 			}
 			const size = numeralSize(count, 24, 21);
-			svg += text(circle.cx, circle.cy - 2 + 0.365 * size, String(count), size, lit ? color : C.dim);
+			svg += text(circle.cx, circle.cy - 2 + 0.365 * size, String(count), size, count > 0 ? color : C.dim);
 			return (
 				svg + glyph(STATUS[status].glyph, circle.cx, circle.cy + 14, 11, lit ? color : mix(color, C.key, 0.5))
 			);
@@ -795,7 +799,7 @@ const gauge: ThemeRenderer = {
 
 function quadCell(x: number, y: number, status: StatusKey, count: number, waiting: number): string {
 	const color = STATUS[status].color;
-	if (count === 0)
+	if (count + waiting === 0)
 		return `<rect x="${x}" y="${y}" width="65" height="65" rx="9" fill="${C.key}" stroke="${C.well}" stroke-width="2"/>${glyph(STATUS[status].glyph, x + 32.5, y + 32.5, 22, mix(color, C.key, 0.6))}`;
 	const size = numeralSize(count, 52, 42);
 	// Two digits shift left and down so they stay inside the cell and clear the corner shapes.
@@ -806,7 +810,14 @@ function quadCell(x: number, y: number, status: StatusKey, count: number, waitin
 			glyph("pause", x + 42, y + 13, 12, C.grey, C.well) +
 			text(x + 60, y + 13 + 0.365 * 15, String(waiting), 15, C.grey, { anchor: "end" });
 	return (
-		svg + text(x + (two ? 33.5 : 37.5), y + (two ? 40.5 : 38.5) + 0.365 * size, String(count), size, color)
+		svg +
+		text(
+			x + (two ? 33.5 : 37.5),
+			y + (two ? 40.5 : 38.5) + 0.365 * size,
+			String(count),
+			size,
+			count > 0 ? color : C.dim,
+		)
 	);
 }
 

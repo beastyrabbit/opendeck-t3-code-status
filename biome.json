@@ -8,7 +8,15 @@
 		}
 	},
 	"files": {
-		"includes": ["**", "!!dist", "!!node_modules", "!!coverage", "!!release", "!!mockups"]
+		"includes": [
+			"**",
+			"!!dist",
+			"!!node_modules",
+			"!!coverage",
+			"!!release",
+			"!!mockups",
+			"!!docs/user/images"
+		]
 	},
 	"formatter": {
 		"enabled": true,
