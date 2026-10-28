@@ -67,7 +67,7 @@ function keySvg(image: string): string {
 }
 
 function escapeXml(value: string): string {
-	return value.replace(/[&<>"]/g, (character) => `&#${character.charCodeAt(0)};`);
+	return value.replace(/[&<>"]/g, (character) => `&#${character.codePointAt(0)};`);
 }
 
 /** A grid of rendered keys with a caption under each, on the dark background OpenDeck uses. */
