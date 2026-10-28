@@ -12,6 +12,15 @@ Installing the normal plugin package does not change an OpenDeck profile. Each r
 
 The setup installs the plugin and puts **Thread status** on the first free key in the `Default` profile. It backs up the profile before changing it and preserves the profile's file permissions. If the action already exists, the setup keeps its position and updates its accessibility settings when needed.
 
+## Pair T3 Code
+
+Start OpenDeck again. The key shows **PAIR** until you pair a T3 Code machine:
+
+1. In T3 Code, open **Settings → Connections**. Enable **Network access** if the pairing controls are hidden, then create a **Read only** pairing link.
+2. Open the key's settings in OpenDeck, paste the complete link into **Pair an environment**, and select **Pair** within five minutes.
+
+To pair several machines at once over SSH and Tailscale, see [Pairing T3 Code machines](https://github.com/beastyrabbit/opendeck-t3-code-status/blob/main/docs/user/pairing.md).
+
 The setup uses `$XDG_CONFIG_HOME/opendeck` when `XDG_CONFIG_HOME` is an absolute path, and `~/.config/opendeck` otherwise. Pass a different location explicitly when needed:
 
 ```bash
