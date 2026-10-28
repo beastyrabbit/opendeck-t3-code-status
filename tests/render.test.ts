@@ -178,6 +178,13 @@ describe("renderKey", () => {
 		assert.ok(size > 0 && size <= (86 * 2) / 3 + 0.1, String(size));
 	});
 
+	test("a long ratio pill stays on the key", () => {
+		const key = svg(renderKey(ready({ total: 100, running: 100, working: 100 }), "combined", "pictogram"));
+		const rect = /<rect x="([\d.-]+)" y="\d+" width="(\d+)"[^>]*\/><text[^>]*>100\/100<\/text>/.exec(key);
+		assert.ok(rect, "pill drawn");
+		assert.ok(Number(rect[1]) >= 4 && Number(rect[1]) + Number(rect[2]) <= 140, `${rect[1]} ${rect[2]}`);
+	});
+
 	test("themes look different", () => {
 		const images = new Set(THEMES.map((theme) => renderKey(BUSY, "combined", theme)));
 		assert.equal(images.size, THEMES.length);

@@ -369,9 +369,13 @@ function pill(
 	return `<rect x="${f(box.x)}" y="${box.y}" width="${width}" height="${box.h}" rx="${box.h / 2}" fill="${fill}" stroke="${C.key}" stroke-width="5"/>${text(box.x + width / 2, box.y + box.h / 2 + 0.365 * box.size, value, box.size, ink, box.spacing ? { spacing: box.spacing } : {})}`;
 }
 
+/** A count pill in a corner; long values such as `100/100` shrink their text to stay on the key. */
+const MAX_PILL_WIDTH = 136;
+
 function cornerPill(value: string, fill: string, ink: string, top: boolean): string {
-	const width = Math.round(value.length * 0.7 * 30 + 22);
-	return pill(value, fill, ink, { x: 140 - width, y: top ? 4 : 98, h: 42, size: 30 }, width);
+	const size = Math.min(30, (MAX_PILL_WIDTH - 22) / (value.length * 0.7));
+	const width = Math.round(value.length * 0.7 * size + 22);
+	return pill(value, fill, ink, { x: 140 - width, y: top ? 4 : 98, h: 42, size }, width);
 }
 
 function wordPill(word: string, fill: string, y = 104): string {
@@ -462,7 +466,7 @@ const counter: ThemeRenderer = {
 			if (waiting > 0)
 				svg +=
 					glyph("pause", x + 38, y + 55.5, 12, C.ink, bandFill) +
-					text(x + 55, y + 55.5 + 0.365 * 15, String(waiting), 15, C.ink);
+					text(x + 55, y + 55.5 + 0.365 * 15, String(waiting), numeralSize(waiting, 15, 15), C.ink);
 			const size = numeralSize(count, 40, 32);
 			return svg + text(x + 32.5, y + 23 + 0.365 * size, String(count), size, lit ? color : C.dim);
 		});
@@ -550,7 +554,7 @@ const pictogram: ThemeRenderer = {
 			if (waiting > 0)
 				svg +=
 					glyph("pause", x + 51, y + 16, 14, C.grey) +
-					text(x + 51, y + 33 + 0.365 * 14, String(waiting), 14, C.grey);
+					text(x + 51, y + 33 + 0.365 * 14, String(waiting), numeralSize(waiting, 14, 14), C.grey);
 			const size = numeralSize(count, 24, 22);
 			return svg + text(x + 32.5, y + 54 + 0.365 * size, String(count), size, lit ? C.white : C.dim);
 		});
