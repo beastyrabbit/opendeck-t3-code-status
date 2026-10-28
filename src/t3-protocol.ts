@@ -89,6 +89,25 @@ function id(value: unknown): string | null {
 	return value;
 }
 
+function oneOf<T extends string>(value: unknown, allowed: readonly T[]): T | null {
+	return allowed.includes(value as T) ? (value as T) : null;
+}
+
+function parseRequest(value: unknown): T3ThreadShell["pendingRuntimeRequest"] {
+	if (value == null) return null;
+	if (!record(value) || !textValue(value.kind, 128)) throw invalid();
+	return { kind: value.kind, ...(typeof value.blocking === "boolean" ? { blocking: value.blocking } : {}) };
+}
+
+function parseTasks(value: unknown): T3ThreadShell["pendingBackgroundTasks"] {
+	const tasks = value ?? [];
+	if (!Array.isArray(tasks) || tasks.length > 1_000) throw invalid();
+	return tasks.map((task: unknown) => {
+		if (!record(task) || !textValue(task.kind, 64)) throw invalid();
+		return { kind: task.kind, awaited: task.awaited === true };
+	});
+}
+
 // Retain only fields used by the status display, never conversation or file data.
 export function parseThread(value: unknown): T3ThreadShell {
 	if (
@@ -100,10 +119,6 @@ export function parseThread(value: unknown): T3ThreadShell {
 	)
 		throw invalid();
 	const lineage = value.lineage;
-	const request = value.pendingRuntimeRequest;
-	if (request != null && (!record(request) || !textValue(request.kind, 128))) throw invalid();
-	const tasks = value.pendingBackgroundTasks ?? [];
-	if (!Array.isArray(tasks) || tasks.length > 1_000) throw invalid();
 	const activity = value.activityRunStatus;
 	if (activity != null && !textValue(activity, 64)) throw invalid();
 	const guests = value.pendingGuestMessageCount ?? 0;
@@ -113,10 +128,7 @@ export function parseThread(value: unknown): T3ThreadShell {
 	return {
 		id: value.id,
 		parentThreadId: id(lineage.parentThreadId),
-		relationshipToParent:
-			lineage.relationshipToParent === "fork" || lineage.relationshipToParent === "subagent"
-				? lineage.relationshipToParent
-				: null,
+		relationshipToParent: oneOf(lineage.relationshipToParent, ["fork", "subagent"]),
 		creationSource: textValue(value.creationSource, 64) ? value.creationSource : null,
 		interactionMode: value.interactionMode === "plan" ? "plan" : "default",
 		status: value.status,
@@ -124,26 +136,15 @@ export function parseThread(value: unknown): T3ThreadShell {
 		latestRunId: id(value.latestRunId),
 		latestRunCompletedAt: date(value.latestRunCompletedAt),
 		activeProviderThreadId: id(value.activeProviderThreadId),
-		pendingRuntimeRequest: record(request)
-			? {
-					kind: request.kind as string,
-					...(typeof request.blocking === "boolean" ? { blocking: request.blocking } : {}),
-				}
-			: null,
+		pendingRuntimeRequest: parseRequest(value.pendingRuntimeRequest),
 		pendingGuestMessageCount: guests,
 		hasActionableProposedPlan: value.hasActionableProposedPlan,
-		pendingBackgroundTasks: tasks.map((task: unknown) => {
-			if (!record(task) || !textValue(task.kind, 64)) throw invalid();
-			return { kind: task.kind, awaited: task.awaited === true };
-		}),
+		pendingBackgroundTasks: parseTasks(value.pendingBackgroundTasks),
 		limitRecovery: record(value.limitRecovery),
 		updatedAt,
 		archivedAt: date(value.archivedAt),
 		deletedAt: date(value.deletedAt),
-		settledOverride:
-			value.settledOverride === "settled" || value.settledOverride === "active"
-				? value.settledOverride
-				: null,
+		settledOverride: oneOf(value.settledOverride, ["settled", "active"]),
 		snoozedAt: date(value.snoozedAt),
 		snoozedUntil: date(value.snoozedUntil),
 		...(value.lastVisitedAt === undefined ? {} : { lastVisitedAt: date(value.lastVisitedAt) }),
