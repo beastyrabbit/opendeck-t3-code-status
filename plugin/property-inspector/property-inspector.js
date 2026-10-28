@@ -547,7 +547,9 @@ function pairedSshHosts(items) {
 	for (const item of items) {
 		try {
 			const url = new URL(item.origin);
-			if (url.protocol !== "http:" || ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) continue;
+			// Pair all takes host names and IPv4 addresses, not bracketed IPv6 literals.
+			const local = ["localhost", "127.0.0.1"].includes(url.hostname);
+			if (url.protocol !== "http:" || local || url.hostname.startsWith("[")) continue;
 			hosts.add(url.port && url.port !== "3773" ? `${url.hostname}:${url.port}` : url.hostname);
 		} catch {
 			// Skip origins that are not URLs.

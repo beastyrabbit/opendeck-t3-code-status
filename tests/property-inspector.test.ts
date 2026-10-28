@@ -337,7 +337,13 @@ test("SSH pairing lists the paired remote machines, sends the hosts, and reports
 				},
 			}),
 		});
-	status(["http://127.0.0.1:3773", "http://anvil:3773", "http://devbox:3774", "https://t3.example.com"]);
+	status([
+		"http://127.0.0.1:3773",
+		"http://anvil:3773",
+		"http://devbox:3774",
+		"https://t3.example.com",
+		"http://[fd7a:115c:a1e0::1]:3773",
+	]);
 	assert.equal(hosts.value, "anvil, devbox:3774");
 	hosts.value = "anvil, kiln";
 	hosts.emit("input");

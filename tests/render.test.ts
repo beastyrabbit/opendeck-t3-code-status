@@ -172,6 +172,12 @@ describe("renderKey", () => {
 		assert.match(svg(renderKey(ready({ total: 5, waiting: 5 }), "combined", "quad")), />5<\/text>/);
 	});
 
+	test("three-digit counts shrink to the width two digits take", () => {
+		const key = svg(renderKey(ready({ total: 120, waiting: 100 }), "waiting", "counter"));
+		const size = Number(/font-size="([\d.]+)"[^>]*>100<\/text>/.exec(key)?.[1]);
+		assert.ok(size > 0 && size <= (86 * 2) / 3 + 0.1, String(size));
+	});
+
 	test("themes look different", () => {
 		const images = new Set(THEMES.map((theme) => renderKey(BUSY, "combined", theme)));
 		assert.equal(images.size, THEMES.length);

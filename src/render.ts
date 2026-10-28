@@ -230,7 +230,11 @@ function text(
 	return `<text x="${f(x)}" y="${f(y)}" text-anchor="${options.anchor ?? "middle"}" fill="${fill}" font-family="DejaVu Sans, sans-serif" font-size="${f(size)}" font-weight="bold"${spacing}>${escapeXml(value)}</text>`;
 }
 
-const numeralSize = (count: number, one: number, two: number) => (String(count).length >= 2 ? two : one);
+/** One digit gets `one`; longer counts share the width two digits get at `two`, so 100 still fits. */
+function numeralSize(count: number, one: number, two: number): number {
+	const digits = String(count).length;
+	return digits === 1 ? one : (two * 2) / Math.max(2, digits);
+}
 const background = (fill: string) => `<rect width="144" height="144" rx="17" fill="${fill}"/>`;
 
 function mix(from: string, to: string, amount: number): string {
