@@ -105,8 +105,13 @@ export function isRelevantThread(thread: T3ThreadShell, now = Date.now(), subage
 	if (isSubagent(thread)) return false;
 	if (isEffectivelySnoozed(thread, now, subagentApproval)) return false;
 	if (thread.settledOverride !== "settled") return true;
-	// T3 settles threads itself; live work and requests stay visible after settlement.
-	return subagentApproval || thread.pendingRuntimeRequest !== null || hasActiveRun(thread);
+	// T3 settles threads itself; live work, requests, and guest messages stay visible after settlement.
+	return (
+		subagentApproval ||
+		thread.pendingRuntimeRequest !== null ||
+		thread.pendingGuestMessageCount > 0 ||
+		hasActiveRun(thread)
+	);
 }
 
 export function summarizeSnapshot(snapshot: T3ShellSnapshot, now = Date.now()): ThreadSummary {

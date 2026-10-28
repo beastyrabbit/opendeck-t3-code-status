@@ -213,6 +213,10 @@ describe("isRelevantThread", () => {
 			true,
 		);
 		assert.equal(isRelevantThread(thread({ settledOverride: "settled" }), NOW, true), true);
+		assert.equal(
+			isRelevantThread(thread({ settledOverride: "settled", pendingGuestMessageCount: 1 }), NOW),
+			true,
+		);
 		assert.equal(isRelevantThread(thread({ settledOverride: "active" }), NOW), true);
 	});
 
