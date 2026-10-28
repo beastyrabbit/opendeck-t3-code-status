@@ -411,7 +411,7 @@ export class T3LiveClient {
 			this.applySnapshot(env, item);
 			return;
 		}
-		if (!sequence(item.sequence) || env.sequence === undefined) throw new Error();
+		if (!sequence(item.sequence) || env.sequence === undefined) throw new Error("update before snapshot");
 		if (item.sequence <= env.sequence) return;
 		this.applyThreadEvent(env, item);
 		env.sequence = item.sequence;

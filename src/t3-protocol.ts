@@ -75,9 +75,22 @@ export function parsePairingLink(link: string, allowHttp = false): { origin: str
 	}
 }
 
+const invalid = () => new LiveConnectionError("invalid-response");
+
+function date(value: unknown): string | null {
+	if (value == null) return null;
+	if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) throw invalid();
+	return value;
+}
+
+function id(value: unknown): string | null {
+	if (value == null) return null;
+	if (!textValue(value)) throw invalid();
+	return value;
+}
+
 // Retain only fields used by the status display, never conversation or file data.
 export function parseThread(value: unknown): T3ThreadShell {
-	const invalid = () => new LiveConnectionError("invalid-response");
 	if (
 		!record(value) ||
 		!textValue(value.id) ||
@@ -86,16 +99,6 @@ export function parseThread(value: unknown): T3ThreadShell {
 		!record(value.lineage)
 	)
 		throw invalid();
-	const date = (v: unknown): string | null => {
-		if (v == null) return null;
-		if (typeof v !== "string" || !Number.isFinite(Date.parse(v))) throw invalid();
-		return v;
-	};
-	const id = (v: unknown): string | null => {
-		if (v == null) return null;
-		if (!textValue(v)) throw invalid();
-		return v;
-	};
 	const lineage = value.lineage;
 	const request = value.pendingRuntimeRequest;
 	if (request != null && (!record(request) || !textValue(request.kind, 128))) throw invalid();

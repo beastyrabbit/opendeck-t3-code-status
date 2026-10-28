@@ -107,15 +107,22 @@ export async function readSshConfigAliases(
 		if (keyword === "host") {
 			aliases.push(...values.filter((value) => HOST_PATTERN.test(value)));
 		} else if (depth < 4) {
-			for (const value of values.filter((value) => !/[*?[]/.test(value))) {
-				const file = value.replace(/^~(?=\/)/, homedir());
-				aliases.push(
-					...(await readSshConfigAliases(isAbsolute(file) ? file : join(homedir(), ".ssh", file), depth + 1)),
-				);
-			}
+			aliases.push(...(await readIncludedAliases(values, depth + 1)));
 		}
 	}
 	return [...new Set(aliases)];
+}
+
+/** Aliases from the literal files an `Include` names; glob patterns are skipped. */
+async function readIncludedAliases(files: string[], depth: number): Promise<string[]> {
+	const aliases: string[] = [];
+	for (const value of files.filter((file) => !/[*?[]/.test(file))) {
+		const file = value.replace(/^~(?=\/)/, homedir());
+		aliases.push(
+			...(await readSshConfigAliases(isAbsolute(file) ? file : join(homedir(), ".ssh", file), depth)),
+		);
+	}
+	return aliases;
 }
 
 /** Runs a command without a shell and collects its output, up to `maxBytes`. */
