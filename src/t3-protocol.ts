@@ -108,6 +108,21 @@ function parseTasks(value: unknown): T3ThreadShell["pendingBackgroundTasks"] {
 	});
 }
 
+const TERMINAL_RUN_STATUSES = new Set([
+	"idle",
+	"completed",
+	"interrupted",
+	"failed",
+	"cancelled",
+	"rolled_back",
+]);
+
+/** When a server omits the completion time, T3 dates a finished run by the thread's last update. */
+function completedAt(value: Record<string, unknown>, updatedAt: string): string | null {
+	if (value.latestRunCompletedAt !== undefined) return date(value.latestRunCompletedAt);
+	return value.latestRunId != null && TERMINAL_RUN_STATUSES.has(value.status as string) ? updatedAt : null;
+}
+
 // Retain only fields used by the status display, never conversation or file data.
 export function parseThread(value: unknown): T3ThreadShell {
 	if (
@@ -134,13 +149,14 @@ export function parseThread(value: unknown): T3ThreadShell {
 		status: value.status,
 		...(activity === undefined ? {} : { activityRunStatus: (activity as string | null) ?? null }),
 		latestRunId: id(value.latestRunId),
-		latestRunCompletedAt: date(value.latestRunCompletedAt),
+		latestRunCompletedAt: completedAt(value, updatedAt),
 		activeProviderThreadId: id(value.activeProviderThreadId),
 		pendingRuntimeRequest: parseRequest(value.pendingRuntimeRequest),
 		pendingGuestMessageCount: guests,
 		hasActionableProposedPlan: value.hasActionableProposedPlan,
 		pendingBackgroundTasks: parseTasks(value.pendingBackgroundTasks),
 		limitRecovery: record(value.limitRecovery),
+		usageLimitFailure: value.lastErrorClass === "usage_limit",
 		updatedAt,
 		archivedAt: date(value.archivedAt),
 		deletedAt: date(value.deletedAt),

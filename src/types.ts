@@ -93,6 +93,8 @@ export interface T3ThreadShell {
 	hasActionableProposedPlan: boolean;
 	pendingBackgroundTasks: T3BackgroundTask[];
 	limitRecovery: boolean;
+	/** The latest failure was a provider usage limit (T3's `lastErrorClass: "usage_limit"`). */
+	usageLimitFailure: boolean;
 	updatedAt: string;
 	archivedAt: string | null;
 	deletedAt: string | null;

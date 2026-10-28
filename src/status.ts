@@ -91,7 +91,9 @@ export function classifyThread(thread: T3ThreadShell, subagentApproval = false):
 	const active = status !== null && ACTIVE_RUN_STATUSES.has(status);
 	const runActive = hasActiveRun(thread);
 	if (thread.interactionMode === "plan" && thread.hasActionableProposedPlan && !runActive) return "plan";
-	if (thread.limitRecovery && !runActive) return "limited";
+	// T3's sidebar shows a failure caused by a usage limit as limited, with or without automatic recovery.
+	if ((thread.limitRecovery || (status === "failed" && thread.usageLimitFailure)) && !runActive)
+		return "limited";
 	if (status === "failed") return "failed";
 	if (status !== null && STARTING_RUN_STATUSES.has(status)) return "starting";
 	if (active || backgroundWorkHoldsCompletion(thread)) return "working";

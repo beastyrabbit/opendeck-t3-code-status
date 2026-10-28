@@ -124,19 +124,18 @@ function statusRunner(command: string, args: string[]) {
 	return runCommand(command, args, MAX_STATUS_BYTES);
 }
 
-/** True when every address of `hostname` is a Tailscale address. */
-export async function isTailnetHost(
+/** The Tailscale address of `hostname` (IPv4 first) when every address it resolves to is one, else undefined. */
+export async function tailnetAddress(
 	hostname: string,
 	resolve: AddressLookup = (name) => lookup(name, { all: true }),
-): Promise<boolean> {
+): Promise<string | undefined> {
 	try {
 		const addresses = await resolve(hostname);
-		return (
-			addresses.length > 0 &&
-			addresses.every(({ address, family }) => TAILNET.check(address, family === 6 ? "ipv6" : "ipv4"))
-		);
+		if (!addresses.every(({ address, family }) => TAILNET.check(address, family === 6 ? "ipv6" : "ipv4")))
+			return undefined;
+		return (addresses.find(({ family }) => family === 4) ?? addresses[0])?.address;
 	} catch {
-		return false;
+		return undefined;
 	}
 }
 

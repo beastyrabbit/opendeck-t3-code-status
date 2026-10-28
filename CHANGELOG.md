@@ -11,9 +11,10 @@ All notable changes to T3 Code Status are recorded here.
 - The Thread status key shows finished threads you have not opened yet, after requests, failures, and usage limits. Background tasks are now grey; cyan marks finished, unseen threads.
 - A paired machine that is offline no longer turns every key **OFF**: the keys count the machines they can reach, and the settings panel names the ones left out.
 - Add **Pair machines over SSH**: one button creates a read-only pairing token on each listed machine through `ssh` and its `t3` command and pairs it, without showing the token. Pressing it again renews every expired authorization.
-- Add **Find**, which lists the machines on your Tailscale network that run T3 Code. Hosts on Tailscale addresses pair over HTTP without the unencrypted-HTTP opt-in.
+- Add **Find**, which lists the machines on your Tailscale network that run T3 Code. Hosts on Tailscale addresses pair over HTTP without the unencrypted-HTTP opt-in, at their Tailscale address.
 - **Pair all** reaches Tailscale devices through the matching SSH alias, finds `t3` in `~/.local/bin` and `~/.t3/bin`, and pairs Windows machines through the T3 Code app's own CLI.
 - Lay out the key settings side by side for OpenDeck's wide settings strip, with larger text and the pairing notes folded away.
+- Count failures caused by a provider usage limit as usage limits, and count finished threads as not seen even when the server omits their completion time, as T3 Code does.
 - Show distinct PAIR, RE-PAIR, and VERSION states for missing pairing, expired authorization, and unsupported T3 versions.
 - Support T3 Code 0.1 and its orchestration protocol 2. The plugin declares the protocol when it connects and parses the V2 thread shell stream. Earlier plugin builds cannot read T3 Code 0.1 and show an error.
 - Derive working, approval, question, plan, failure, and background states with the same rules as T3 Code's client. Usage-limit pauses are tracked separately, and a live subagent's approval now flags its parent thread.

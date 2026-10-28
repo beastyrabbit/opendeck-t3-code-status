@@ -3,10 +3,10 @@ import { test } from "node:test";
 
 import {
 	discoverTailnetHosts,
-	isTailnetHost,
 	matchSshTarget,
 	sshPairingIssuer,
 	type TailnetPeer,
+	tailnetAddress,
 } from "../src/tailnet.js";
 
 const STATUS = JSON.stringify({
@@ -48,21 +48,22 @@ test("discovery finds nothing when Tailscale is missing or prints something unex
 	assert.deepEqual(await discoverTailnetHosts(async () => ({ code: 0, stdout: "{}" }), probe), []);
 });
 
-test("only names that resolve entirely to Tailscale addresses count as encrypted", async () => {
+test("only names that resolve entirely to Tailscale addresses get a Tailscale address", async () => {
 	const resolveTo =
 		(...addresses: string[]) =>
 		async () =>
 			addresses.map((address) => ({ address, family: address.includes(":") ? 6 : 4 }));
-	assert.equal(await isTailnetHost("anvil", resolveTo("100.80.1.1")), true);
-	assert.equal(await isTailnetHost("anvil", resolveTo("100.80.1.1", "fd7a:115c:a1e0::1")), true);
-	assert.equal(await isTailnetHost("anvil", resolveTo("100.80.1.1", "192.168.1.5")), false);
-	assert.equal(await isTailnetHost("anvil", resolveTo("100.128.0.1")), false);
-	assert.equal(await isTailnetHost("anvil", resolveTo()), false);
+	assert.equal(await tailnetAddress("anvil", resolveTo("100.80.1.1")), "100.80.1.1");
+	assert.equal(await tailnetAddress("anvil", resolveTo("fd7a:115c:a1e0::1", "100.80.1.1")), "100.80.1.1");
+	assert.equal(await tailnetAddress("anvil", resolveTo("fd7a:115c:a1e0::1")), "fd7a:115c:a1e0::1");
+	assert.equal(await tailnetAddress("anvil", resolveTo("100.80.1.1", "192.168.1.5")), undefined);
+	assert.equal(await tailnetAddress("anvil", resolveTo("100.128.0.1")), undefined);
+	assert.equal(await tailnetAddress("anvil", resolveTo()), undefined);
 	assert.equal(
-		await isTailnetHost("anvil", async () => {
+		await tailnetAddress("anvil", async () => {
 			throw new Error("ENOTFOUND");
 		}),
-		false,
+		undefined,
 	);
 });
 

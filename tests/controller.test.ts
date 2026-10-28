@@ -868,7 +868,7 @@ test("concurrent pairing commands get a busy response and never write credential
 			finish = resolve;
 		});
 	};
-	const controller = new T3CodeController(host, client, { isEncryptedNetwork: async () => false });
+	const controller = new T3CodeController(host, client, { tailnetAddress: async () => undefined });
 	controller.handle(
 		event("sendToPlugin", "key-a", { command: "pair", link: "http://localhost/pair#token=fixture" }),
 	);
@@ -899,7 +899,7 @@ test("SSH pairing pairs every host it can and reports each one without leaking t
 	};
 	const issued: string[] = [];
 	const controller = new T3CodeController(host, client, {
-		isEncryptedNetwork: async () => false,
+		tailnetAddress: async () => undefined,
 		issuePairingLink: async (target) => {
 			issued.push(target);
 			if (target === "mac") throw new LiveConnectionError("ssh-failed");
@@ -928,7 +928,7 @@ test("SSH pairing pairs every host it can and reports each one without leaking t
 	await controller.dispose();
 });
 
-test("tailnet discovery reports found hosts, and tailnet hosts pair over HTTP without the opt-in", async () => {
+test("tailnet discovery reports found hosts, and tailnet hosts pair at their Tailscale address without the opt-in", async () => {
 	const host = new FakeHost();
 	const client = new FakeClient() as FakeClient & T3StatusClient;
 	const paired: Array<{ link: string; allowHttp: boolean }> = [];
@@ -941,7 +941,7 @@ test("tailnet discovery reports found hosts, and tailnet hosts pair over HTTP wi
 			discoveries += 1;
 			return ["anvil", "kiln"];
 		},
-		isEncryptedNetwork: async (hostname) => hostname === "anvil",
+		tailnetAddress: async (hostname) => (hostname === "anvil" ? "100.80.1.1" : undefined),
 		issuePairingLink: async (target) => `http://${target}/pair#token=fixture`,
 	});
 	// A second inspector that asks while discovery runs gets the same result, without a second run.
@@ -957,19 +957,25 @@ test("tailnet discovery reports found hosts, and tailnet hosts pair over HTTP wi
 
 	controller.handle(event("sendToPlugin", "key-a", { command: "pairSsh", hosts: "anvil:3774, kiln" }));
 	await new Promise((resolve) => setImmediate(resolve));
-	assert.deepEqual(
-		paired.map((entry) => entry.allowHttp),
-		[true, false],
-	);
+	// The exempt host is paired at its Tailscale address, so a later DNS answer cannot redirect it.
+	assert.deepEqual(paired, [
+		{ link: "http://100.80.1.1:3774/pair#token=fixture", allowHttp: true },
+		{ link: "http://kiln/pair#token=fixture", allowHttp: false },
+	]);
 
 	// A pasted link gets the same exemption, judged by the server it points at.
-	for (const link of ["http://anvil:3773/pair#token=fixture", "http://kiln:3773/pair#token=fixture"]) {
+	for (const link of [
+		"http://anvil:3773/pair#token=fixture",
+		"http://kiln:3773/pair#token=fixture",
+		"https://app.t3.codes/pair?host=http%3A%2F%2Fanvil%3A3773#token=fixture",
+	]) {
 		controller.handle(event("sendToPlugin", "key-a", { command: "pair", link }));
 		await new Promise((resolve) => setImmediate(resolve));
 	}
-	assert.deepEqual(
-		paired.slice(2).map((entry) => entry.allowHttp),
-		[true, false],
-	);
+	assert.deepEqual(paired.slice(2), [
+		{ link: "http://100.80.1.1:3773/pair#token=fixture", allowHttp: true },
+		{ link: "http://kiln:3773/pair#token=fixture", allowHttp: false },
+		{ link: "https://app.t3.codes/pair?host=http%3A%2F%2F100.80.1.1%3A3773#token=fixture", allowHttp: true },
+	]);
 	await controller.dispose();
 });

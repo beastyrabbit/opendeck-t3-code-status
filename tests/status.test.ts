@@ -31,6 +31,7 @@ function thread(overrides: Partial<T3ThreadShell> = {}): T3ThreadShell {
 		hasActionableProposedPlan: false,
 		pendingBackgroundTasks: [],
 		limitRecovery: false,
+		usageLimitFailure: false,
 		updatedAt: "2030-01-01T11:00:00.000Z",
 		archivedAt: null,
 		deletedAt: null,
@@ -118,6 +119,11 @@ describe("classifyThread", () => {
 		{
 			name: "a usage limit waits for its reset",
 			source: { status: "failed", limitRecovery: true },
+			expected: "limited",
+		},
+		{
+			name: "a usage-limit failure without automatic recovery is still limited",
+			source: { status: "failed", usageLimitFailure: true },
 			expected: "limited",
 		},
 		{ name: "a failed run", source: { status: "failed" }, expected: "failed" },
@@ -514,5 +520,34 @@ describe("parseThread", () => {
 		assert.equal("lastVisitedAt" in older, false);
 		assert.equal("blockedOnThreadWait" in older, false);
 		assert.throws(() => parseThread({ ...wire, lastVisitedAt: "not a date" }));
+	});
+
+	test("keeps whether the latest failure was a usage limit", () => {
+		assert.equal(
+			parseThread({ ...wire, status: "failed", lastErrorClass: "usage_limit" }).usageLimitFailure,
+			true,
+		);
+		assert.equal(
+			parseThread({ ...wire, status: "failed", lastErrorClass: "provider" }).usageLimitFailure,
+			false,
+		);
+		assert.equal(parseThread(wire).usageLimitFailure, false);
+	});
+
+	test("dates a finished run by its last update when the server omits the completion time, as T3 does", () => {
+		const finished = { ...wire, status: "completed", latestRunId: "run-1" };
+		assert.equal(parseThread(finished).latestRunCompletedAt, "2030-01-01T11:00:00.000Z");
+		assert.equal(parseThread({ ...finished, latestRunCompletedAt: null }).latestRunCompletedAt, null);
+		assert.equal(parseThread({ ...wire, latestRunId: "run-1" }).latestRunCompletedAt, null);
+		assert.equal(parseThread({ ...finished, latestRunId: null }).latestRunCompletedAt, null);
+		const unseen = summarizeSnapshot(
+			{
+				snapshotSequence: 1,
+				threads: [parseThread({ ...finished, lastVisitedAt: "2030-01-01T10:00:00.000Z" })],
+				updatedAt: "2030-01-01T12:00:00.000Z",
+			},
+			NOW,
+		);
+		assert.equal(unseen.unseen, 1);
 	});
 });
