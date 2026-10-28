@@ -230,12 +230,10 @@ export class T3LiveClient {
 		const connectionStatus = await this.getConnectionStatus();
 		if (connectionStatus.state !== "connected") {
 			const unsupported = [...this.environments.values()].some((env) => env.error === "unsupported-version");
+			if (connectionStatus.state === "error")
+				throw new LiveConnectionError(this.loadError ?? "invalid-response");
 			throw new LiveConnectionError(
-				connectionStatus.state === "error"
-					? (this.loadError ?? "invalid-response")
-					: connectionStatus.state === "offline" && unsupported
-						? "unsupported-version"
-						: connectionStatus.state,
+				connectionStatus.state === "offline" && unsupported ? "unsupported-version" : connectionStatus.state,
 			);
 		}
 		const summary = emptySummary();
@@ -339,15 +337,7 @@ export class T3LiveClient {
 			});
 			socket.on("unexpected-response", (_request, response) => {
 				response.destroy();
-				if (current())
-					this.fail(
-						env,
-						response.statusCode === 401 || response.statusCode === 403
-							? "authorization-required"
-							: response.statusCode === 426
-								? "unsupported-version"
-								: "offline",
-					);
+				if (current()) this.fail(env, upgradeFailure(response.statusCode));
 			});
 			socket.on("close", () => {
 				if (current()) this.fail(env, "offline");
@@ -418,29 +408,36 @@ export class T3LiveClient {
 		// Sent only to clients that request completion markers; the snapshot already synchronizes.
 		if (item.kind === "synchronized") return;
 		if (item.kind === "snapshot") {
-			// Repository-identity refreshes carry project metadata with an empty thread list.
-			if ("resolvedRepositoryIdentityRoots" in item) return;
-			const snapshot = item.snapshot;
-			if (
-				!record(snapshot) ||
-				!sequence(snapshot.snapshotSequence) ||
-				!Array.isArray(snapshot.threads) ||
-				snapshot.threads.length > MAX_THREADS
-			)
-				throw new Error();
-			const threads = new Map<string, T3ThreadShell>();
-			for (const raw of snapshot.threads) {
-				const thread = parseThread(raw);
-				if (threads.has(thread.id)) throw new Error();
-				threads.set(thread.id, thread);
-			}
-			env.threads = threads;
-			env.sequence = snapshot.snapshotSequence;
-			this.synchronized(env);
+			this.applySnapshot(env, item);
 			return;
 		}
 		if (!sequence(item.sequence) || env.sequence === undefined) throw new Error();
 		if (item.sequence <= env.sequence) return;
+		this.applyThreadEvent(env, item);
+		env.sequence = item.sequence;
+	}
+	private applySnapshot(env: Environment, item: Record<string, unknown>): void {
+		// Repository-identity refreshes carry project metadata with an empty thread list.
+		if ("resolvedRepositoryIdentityRoots" in item) return;
+		const snapshot = item.snapshot;
+		if (
+			!record(snapshot) ||
+			!sequence(snapshot.snapshotSequence) ||
+			!Array.isArray(snapshot.threads) ||
+			snapshot.threads.length > MAX_THREADS
+		)
+			throw new Error();
+		const threads = new Map<string, T3ThreadShell>();
+		for (const raw of snapshot.threads) {
+			const thread = parseThread(raw);
+			if (threads.has(thread.id)) throw new Error();
+			threads.set(thread.id, thread);
+		}
+		env.threads = threads;
+		env.sequence = snapshot.snapshotSequence;
+		this.synchronized(env);
+	}
+	private applyThreadEvent(env: Environment, item: Record<string, unknown>): void {
 		switch (item.kind) {
 			case "thread.updated": {
 				const thread = parseThread(item.thread);
@@ -461,7 +458,6 @@ export class T3LiveClient {
 				// Project changes, and kinds added by newer servers, do not affect thread status.
 				break;
 		}
-		env.sequence = item.sequence;
 	}
 	private synchronized(env: Environment): void {
 		env.state = "connected";
@@ -521,4 +517,10 @@ export class T3LiveClient {
 			signal?.removeEventListener("abort", abort);
 		}
 	}
+}
+
+/** Maps a refused WebSocket upgrade to the state the key shows. */
+function upgradeFailure(statusCode: number | undefined): LiveErrorCode {
+	if (statusCode === 401 || statusCode === 403) return "authorization-required";
+	return statusCode === 426 ? "unsupported-version" : "offline";
 }

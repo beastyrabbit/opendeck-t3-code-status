@@ -183,7 +183,7 @@ export function getAccessibleTitle(model: DashboardModel, mode: RenderMode = "co
 	const working = `${summary.running} of ${summary.total} working`;
 	const details = [
 		summary.failed > 0 ? plural(summary.failed, "error", "errors") : "",
-		needs > 0 ? `${needs} ${needs === 1 ? "needs" : "need"} your attention` : "",
+		needs > 0 ? `${plural(needs, "needs", "need")} your attention` : "",
 		summary.limited > 0 ? `${summary.limited} paused by a usage limit` : "",
 		summary.unseen > 0 ? `${summary.unseen} done, not seen` : "",
 	].filter(Boolean);
@@ -246,6 +246,15 @@ function mix(from: string, to: string, amount: number): string {
 		)
 		.join("")
 		.toUpperCase()}`;
+}
+
+/** How a key reads: its blink frame, an empty count, an idle state, or a live count. */
+type Tone = "frame" | "zero" | "idle" | "live";
+
+function toneOf(frame: boolean, zero: boolean, idle: boolean): Tone {
+	if (frame) return "frame";
+	if (zero) return "zero";
+	return idle ? "idle" : "live";
 }
 
 function bubblePath(cx: number, cy: number, s: number): string {
@@ -338,8 +347,10 @@ function glyph(name: Glyph, cx: number, cy: number, s: number, color: string, bg
 		case "bubbleQ":
 		case "bubbleLines": {
 			const inner = BUBBLE_INNER[name];
-			const bubble = `<path d="${bubblePath(cx, cy, s)}" fill="${color}"/>`;
-			return inner ? bubble + glyph(inner, cx, cy - 0.08 * s, 0.42 * s, bg, color) : bubble;
+			// The inner mark is cut out of the bubble: drawn in the key colour on the bubble colour.
+			const cutout = { ink: bg, under: color };
+			const bubble = `<path d="${bubblePath(cx, cy, s)}" fill="${cutout.under}"/>`;
+			return inner ? bubble + glyph(inner, cx, cy - 0.08 * s, 0.42 * s, cutout.ink, cutout.under) : bubble;
 		}
 	}
 }
@@ -399,18 +410,26 @@ function counterKey(
 	options: { total?: number; zero?: boolean },
 ) {
 	const color = STATUS[status].color;
-	const idle = status === "none" || status === "open" || options.zero === true;
-	const bandFill = frame ? C.ink : idle ? C.well : color;
-	const glyphColor = frame ? color : options.zero ? mix(color, C.well, 0.45) : idle ? C.grey : C.ink;
+	const tone = toneOf(frame, options.zero === true, status === "none" || status === "open");
+	const bandFill = { frame: C.ink, zero: C.well, idle: C.well, live: color }[tone];
+	const glyphColor = { frame: color, zero: mix(color, C.well, 0.45), idle: C.grey, live: C.ink }[tone];
 	const size = numeralSize(count, 104, 86);
 	let svg = background(frame ? color : C.key);
 	svg += band(bandFill);
 	svg += glyph(STATUS[status].glyph, 27, 125, 24, glyphColor, bandFill);
 	if (options.total !== undefined)
-		svg += text(134, 136, String(options.total), 30, frame ? color : idle ? C.grey : C.ink, {
-			anchor: "end",
-		});
-	return svg + text(72, 56 + 0.365 * size, String(count), size, frame ? C.ink : idle ? C.dim : color);
+		svg += text(
+			134,
+			136,
+			String(options.total),
+			30,
+			{ frame: color, zero: C.grey, idle: C.grey, live: C.ink }[tone],
+			{
+				anchor: "end",
+			},
+		);
+	const countColor = { frame: C.ink, zero: C.dim, idle: C.dim, live: color }[tone];
+	return svg + text(72, 56 + 0.365 * size, String(count), size, countColor);
 }
 
 const counter: ThemeRenderer = {
@@ -451,34 +470,12 @@ const counter: ThemeRenderer = {
 const BUBBLE_STATUSES = new Set<StatusKey>(["needs", "approval", "question", "plan"]);
 const BUBBLE_GLYPHS: Partial<Record<StatusKey, Glyph>> = { approval: "check", question: "q", plan: "lines" };
 
-function pictogramKey(
-	status: StatusKey,
-	count: number,
-	frame: boolean,
-	options: { zero?: boolean; badge?: string; badgeFill?: string; badgeInk?: string },
-): string {
+type PictogramOptions = { zero?: boolean; badge?: string; badgeFill?: string; badgeInk?: string };
+
+function pictogramKey(status: StatusKey, count: number, frame: boolean, options: PictogramOptions): string {
 	const color = STATUS[status].color;
+	if (BUBBLE_STATUSES.has(status)) return bubbleKey(status, count, frame, options);
 	let svg = background(C.key);
-	if (BUBBLE_STATUSES.has(status)) {
-		// The bubble sits high-left so the count pill clears its tail.
-		const fill = options.zero || frame ? C.key : color;
-		const faded = mix(color, C.key, 0.55);
-		svg += `<path d="${bubblePath(66, 60, 100)}" fill="${fill}" stroke="${options.zero ? faded : color}" stroke-width="${options.zero ? 6 : frame ? 8 : 0}" stroke-linejoin="round"/>`;
-		const inner = options.zero ? faded : frame ? color : C.ink;
-		const subtype = BUBBLE_GLYPHS[status];
-		if (subtype) svg += glyph(subtype, 66, 52, 44, inner, fill);
-		else
-			svg += text(
-				66,
-				52 + 0.365 * numeralSize(count, 76, 62),
-				String(count),
-				numeralSize(count, 76, 62),
-				inner,
-			);
-		if (options.badge !== undefined && !options.zero)
-			svg += cornerPill(options.badge, options.badgeFill ?? color, options.badgeInk ?? C.ink, false);
-		return svg;
-	}
 	svg += glyph(
 		STATUS[status].glyph,
 		status === "working" ? 78 : 72,
@@ -488,6 +485,28 @@ function pictogramKey(
 	);
 	if (options.badge !== undefined && !options.zero)
 		svg += cornerPill(options.badge, options.badgeFill ?? color, options.badgeInk ?? C.ink, true);
+	return svg;
+}
+
+/** Request keys draw a speech bubble; the bubble sits high-left so the count pill clears its tail. */
+function bubbleKey(status: StatusKey, count: number, frame: boolean, options: PictogramOptions): string {
+	const color = STATUS[status].color;
+	const faded = mix(color, C.key, 0.55);
+	const tone = options.zero ? "zero" : toneOf(frame, false, false);
+	const fill = tone === "live" ? color : C.key;
+	const stroke = {
+		width: { frame: 8, zero: 6, idle: 0, live: 0 }[tone],
+		color: options.zero ? faded : color,
+	};
+	const inner = { frame: color, zero: faded, idle: C.ink, live: C.ink }[tone];
+	let svg = `${background(C.key)}<path d="${bubblePath(66, 60, 100)}" fill="${fill}" stroke="${stroke.color}" stroke-width="${stroke.width}" stroke-linejoin="round"/>`;
+	const subtype = BUBBLE_GLYPHS[status];
+	const size = numeralSize(count, 76, 62);
+	svg += subtype
+		? glyph(subtype, 66, 52, 44, inner, fill)
+		: text(66, 52 + 0.365 * size, String(count), size, inner);
+	if (options.badge !== undefined && !options.zero)
+		svg += cornerPill(options.badge, options.badgeFill ?? color, options.badgeInk ?? C.ink, false);
 	return svg;
 }
 
@@ -545,9 +564,9 @@ function floodKey(
 	const color = STATUS[status].color;
 	if (options.zero)
 		return background(C.key) + glyph(STATUS[status].glyph, 72, 72, 60, mix(color, C.key, 0.55));
-	const idle = status === "none" || status === "open";
-	const fill = idle ? C.well : frame ? C.ink : color;
-	const ink = idle ? C.grey : frame ? color : C.ink;
+	const tone = status === "none" || status === "open" ? "idle" : toneOf(frame, false, false);
+	const fill = { frame: C.ink, zero: color, idle: C.well, live: color }[tone];
+	const ink = { frame: color, zero: C.ink, idle: C.grey, live: C.ink }[tone];
 	let svg = background(fill) + glyph(STATUS[status].glyph, 28, 28, 28, ink, fill);
 	if (options.total !== undefined) {
 		const size = numeralSize(count, 100, 84);
@@ -698,12 +717,18 @@ function gaugeKey(
 	zero = false,
 ): string {
 	const color = STATUS[status].color;
-	const idle = status === "none" || status === "open" || zero;
+	const tone = toneOf(frame, zero, status === "none" || status === "open");
 	let svg = background(C.key) + ring(segments);
 	if (frame) svg += `<circle cx="72" cy="72" r="51" fill="${color}"/>`;
 	const size = numeralSize(count, 80, 66);
-	svg += text(72, 60 + 0.365 * size, String(count), size, frame ? C.ink : idle ? C.dim : color);
-	const glyphColor = frame ? C.ink : zero ? mix(color, C.key, 0.5) : idle ? C.grey : color;
+	svg += text(
+		72,
+		60 + 0.365 * size,
+		String(count),
+		size,
+		{ frame: C.ink, zero: C.dim, idle: C.dim, live: color }[tone],
+	);
+	const glyphColor = { frame: C.ink, zero: mix(color, C.key, 0.5), idle: C.grey, live: color }[tone];
 	return svg + glyph(STATUS[status].glyph, 72, 112, 24, glyphColor, frame ? color : C.key);
 }
 
@@ -720,14 +745,14 @@ const gauge: ThemeRenderer = {
 	single(mode, reading, summary, frame) {
 		const color = STATUS[reading.status].color;
 		const subset = GAUGE_SUBSET[mode];
-		const segments = subset
-			? threadSegments(summary, (category) => (subset.includes(category) ? color : C.well))
-			: summary.total > 0
-				? [
-						{ color, weight: summary.background },
-						{ color: C.well, weight: summary.total - summary.background },
-					].filter((segment) => segment.weight > 0)
-				: [];
+		let segments: Segment[] = [];
+		if (subset)
+			segments = threadSegments(summary, (category) => (subset.includes(category) ? color : C.well));
+		else if (summary.total > 0)
+			segments = [
+				{ color, weight: summary.background },
+				{ color: C.well, weight: summary.total - summary.background },
+			].filter((segment) => segment.weight > 0);
 		return gaugeKey(reading.status, reading.count, frame, segments, reading.count === 0);
 	},
 	connection(kind) {
@@ -780,13 +805,26 @@ function quadCell(x: number, y: number, status: StatusKey, count: number, waitin
 /** One status per key: the shape top left and a full-size numeral. */
 function quadKey(status: StatusKey, count: number, frame: boolean): string {
 	const color = STATUS[status].color;
-	const zero = count === 0;
+	const tone = toneOf(frame, count === 0, false);
 	const fill = frame ? color : C.key;
 	const size = numeralSize(count, 104, 86);
 	return (
 		background(fill) +
-		glyph(STATUS[status].glyph, 28, 28, 34, frame ? C.ink : zero ? mix(color, C.key, 0.5) : color, fill) +
-		text(80, 80 + 0.365 * size, String(count), size, frame ? C.ink : zero ? C.dim : color)
+		glyph(
+			STATUS[status].glyph,
+			28,
+			28,
+			34,
+			{ frame: C.ink, zero: mix(color, C.key, 0.5), idle: color, live: color }[tone],
+			fill,
+		) +
+		text(
+			80,
+			80 + 0.365 * size,
+			String(count),
+			size,
+			{ frame: C.ink, zero: C.dim, idle: color, live: color }[tone],
+		)
 	);
 }
 

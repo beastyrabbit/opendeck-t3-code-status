@@ -63,4 +63,5 @@ jobs:
         with:
           args: >
             -Dsonar.projectKey=beastyrabbit_opendeck-t3-code-status_884478c4-6b8e-4597-9628-2bfbaa136da2
+            -Dsonar.exclusions=mockups/**
             ${{ steps.pr.outputs.args }}

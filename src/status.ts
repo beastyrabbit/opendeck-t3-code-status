@@ -15,6 +15,12 @@ function runtimeStatus(thread: T3ThreadShell): T3RunStatus | null {
 	return parkAtIdle ? "idle" : (thread.activityRunStatus ?? thread.status);
 }
 
+/** Whether the latest run itself is active. Background work parks the thread at idle without stopping it. */
+function hasActiveRun(thread: T3ThreadShell): boolean {
+	if (thread.latestRunId === null && thread.activeProviderThreadId === null) return false;
+	return ACTIVE_RUN_STATUSES.has(thread.activityRunStatus ?? thread.status);
+}
+
 // Commands and monitors are often a dev server left running, so they hold only when awaited.
 function backgroundWorkHoldsCompletion(thread: T3ThreadShell): boolean {
 	return thread.pendingBackgroundTasks.some(
@@ -83,8 +89,9 @@ export function classifyThread(thread: T3ThreadShell, subagentApproval = false):
 	if (hasPendingInput(thread) || thread.pendingGuestMessageCount > 0) return "input";
 	const status = runtimeStatus(thread);
 	const active = status !== null && ACTIVE_RUN_STATUSES.has(status);
-	if (thread.interactionMode === "plan" && thread.hasActionableProposedPlan && !active) return "plan";
-	if (thread.limitRecovery && !active) return "limited";
+	const runActive = hasActiveRun(thread);
+	if (thread.interactionMode === "plan" && thread.hasActionableProposedPlan && !runActive) return "plan";
+	if (thread.limitRecovery && !runActive) return "limited";
 	if (status === "failed") return "failed";
 	if (status !== null && STARTING_RUN_STATUSES.has(status)) return "starting";
 	if (active || backgroundWorkHoldsCompletion(thread)) return "working";
@@ -99,12 +106,7 @@ export function isRelevantThread(thread: T3ThreadShell, now = Date.now(), subage
 	if (isEffectivelySnoozed(thread, now, subagentApproval)) return false;
 	if (thread.settledOverride !== "settled") return true;
 	// T3 settles threads itself; live work and requests stay visible after settlement.
-	const status = runtimeStatus(thread);
-	return (
-		subagentApproval ||
-		thread.pendingRuntimeRequest !== null ||
-		(status !== null && ACTIVE_RUN_STATUSES.has(status))
-	);
+	return subagentApproval || thread.pendingRuntimeRequest !== null || hasActiveRun(thread);
 }
 
 export function summarizeSnapshot(snapshot: T3ShellSnapshot, now = Date.now()): ThreadSummary {
@@ -155,5 +157,5 @@ function isEffectivelySnoozed(thread: T3ThreadShell, now: number, subagentApprov
 	if (runtimeStatus(thread) !== "failed") return true;
 	const failedAt =
 		thread.status === "failed" ? (thread.latestRunCompletedAt ?? thread.updatedAt) : thread.updatedAt;
-	return thread.snoozedAt !== null && !(Date.parse(failedAt) > Date.parse(thread.snoozedAt));
+	return thread.snoozedAt !== null && Date.parse(failedAt) <= Date.parse(thread.snoozedAt);
 }

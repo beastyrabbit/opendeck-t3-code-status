@@ -5,7 +5,7 @@ const ACTION_NOTES = {
 		"Shows four counts on one key: running threads and what needs you on top, finished threads you have not opened and errors below.",
 };
 const SETTINGS_VERSION = 2;
-const DISPLAY_MODES = [
+const DISPLAY_MODES = new Set([
 	"combined",
 	"working",
 	"needs",
@@ -16,9 +16,9 @@ const DISPLAY_MODES = [
 	"limit",
 	"background",
 	"waiting",
-];
+]);
 const LEGACY_DISPLAY_MODES = { threads: "working", questions: "needs" };
-const THEMES = ["counter", "pictogram", "flood", "gauge", "quad"];
+const THEMES = new Set(["counter", "pictogram", "flood", "gauge", "quad"]);
 const MAX_ACTION_INFO_CODE_UNITS = 64 * 1024;
 const MAX_MESSAGE_CODE_UNITS = 64 * 1024;
 const MAX_CONTEXT_CODE_UNITS = 256;
@@ -211,11 +211,11 @@ function applySettings(settings) {
 
 function normalizeDisplayMode(value) {
 	if (Object.hasOwn(LEGACY_DISPLAY_MODES, value)) return LEGACY_DISPLAY_MODES[value];
-	return DISPLAY_MODES.includes(value) ? value : "combined";
+	return DISPLAY_MODES.has(value) ? value : "combined";
 }
 
 function normalizeTheme(value) {
-	return THEMES.includes(value) ? value : "counter";
+	return THEMES.has(value) ? value : "counter";
 }
 
 function updateDisplayNote() {
@@ -274,6 +274,12 @@ function sendSocketMessage(message) {
 	}
 }
 
+function describePairingResult(payload) {
+	if (payload.error) return localizeRuntimeError(payload.error);
+	if (Array.isArray(payload.hosts)) return describeSshResults(payload.hosts.slice(0, 16));
+	return "Connection settings saved.";
+}
+
 function handleSocketMessage(event) {
 	if (protocolFailed) return;
 	const raw = event?.data;
@@ -301,14 +307,7 @@ function handleSocketMessage(event) {
 	if (message.event === "sendToPropertyInspector" && message.payload?.type === "pairingResult") {
 		authBusy = false;
 		setSettingsEnabled(socketReady);
-		setTextContent(
-			authResult ?? elements.pairingResult,
-			message.payload.error
-				? localizeRuntimeError(message.payload.error)
-				: Array.isArray(message.payload.hosts)
-					? describeSshResults(message.payload.hosts.slice(0, 16))
-					: "Connection settings saved.",
-		);
+		setTextContent(authResult ?? elements.pairingResult, describePairingResult(message.payload));
 		return;
 	}
 	if (message.event === "sendToPropertyInspector" && message.payload?.type === "discoveryResult") {

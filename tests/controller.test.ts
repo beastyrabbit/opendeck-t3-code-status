@@ -868,13 +868,14 @@ test("concurrent pairing commands get a busy response and never write credential
 			finish = resolve;
 		});
 	};
-	const controller = new T3CodeController(host, client);
+	const controller = new T3CodeController(host, client, { isEncryptedNetwork: async () => false });
 	controller.handle(
 		event("sendToPlugin", "key-a", { command: "pair", link: "http://localhost/pair#token=fixture" }),
 	);
 	controller.handle(
 		event("sendToPlugin", "key-b", { command: "pair", link: "http://localhost/pair#token=fixture-two" }),
 	);
+	await flushMicrotasks();
 	assert.equal(calls, 1);
 	assert.ok(
 		host.inspectorMessages.some(
@@ -958,6 +959,16 @@ test("tailnet discovery reports found hosts, and tailnet hosts pair over HTTP wi
 	await new Promise((resolve) => setImmediate(resolve));
 	assert.deepEqual(
 		paired.map((entry) => entry.allowHttp),
+		[true, false],
+	);
+
+	// A pasted link gets the same exemption, judged by the server it points at.
+	for (const link of ["http://anvil:3773/pair#token=fixture", "http://kiln:3773/pair#token=fixture"]) {
+		controller.handle(event("sendToPlugin", "key-a", { command: "pair", link }));
+		await new Promise((resolve) => setImmediate(resolve));
+	}
+	assert.deepEqual(
+		paired.slice(2).map((entry) => entry.allowHttp),
 		[true, false],
 	);
 	await controller.dispose();

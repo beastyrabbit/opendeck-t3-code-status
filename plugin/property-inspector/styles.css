@@ -167,6 +167,7 @@ button:focus-visible,
 }
 
 .result {
+	display: block;
 	white-space: pre-line;
 	color: var(--ink);
 }
@@ -219,7 +220,7 @@ button:focus-visible,
 
 .connection-detail {
 	margin: 2px 0 0;
-	word-break: break-word;
+	overflow-wrap: anywhere;
 }
 
 .error-message {
@@ -228,7 +229,8 @@ button:focus-visible,
 	color: #ffdadd;
 	border: 1px solid rgb(255 98 107 / 38%);
 	border-radius: 6px;
-	background: rgb(255 98 107 / 8%);
+	/* 8% of --red over --panel, opaque so contrast checks see the real background */
+	background: #2b262c;
 }
 
 .status-light {

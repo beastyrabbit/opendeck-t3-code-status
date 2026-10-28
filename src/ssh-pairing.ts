@@ -22,8 +22,7 @@ const REMOTE_COMMAND = [
 ].join("; ");
 // Windows T3 Code ships no t3 command; its app runs the same CLI in Node mode. Runs in cmd, the
 // default shell of Windows OpenSSH, and is tried only when the command above fails.
-const WINDOWS_COMMAND =
-	'set ELECTRON_RUN_AS_NODE=1&& "%LOCALAPPDATA%\\Programs\\t3code\\T3 Code (Beta).exe" "%LOCALAPPDATA%\\Programs\\t3code\\resources\\server.asar\\apps\\server\\dist\\bin.mjs" auth pairing create --scope orchestration:read --ttl 5m --label opendeck-t3-code-status --json';
+const WINDOWS_COMMAND = String.raw`set ELECTRON_RUN_AS_NODE=1&& "%LOCALAPPDATA%\Programs\t3code\T3 Code (Beta).exe" "%LOCALAPPDATA%\Programs\t3code\resources\server.asar\apps\server\dist\bin.mjs" auth pairing create --scope orchestration:read --ttl 5m --label opendeck-t3-code-status --json`;
 const MAX_CONFIG_BYTES = 256 * 1024;
 
 export interface CommandResult {
@@ -78,6 +77,16 @@ function issuedCredential(result: CommandResult): string | undefined {
 	}
 }
 
+/** Splits an ssh_config line into its lower-case keyword and value; both forms `Key value` and `Key=value` occur. */
+function sshDirective(line: string): [keyword: string, value: string] {
+	const trimmed = line.trim();
+	const keyEnd = trimmed.search(/[\s=]/);
+	if (keyEnd <= 0) return ["", ""];
+	let value = trimmed.slice(keyEnd).trim();
+	if (value.startsWith("=")) value = value.slice(1).trim();
+	return [trimmed.slice(0, keyEnd).toLowerCase(), value];
+}
+
 /** The literal `Host` names in the user's SSH config and the files it includes. */
 export async function readSshConfigAliases(
 	path = join(homedir(), ".ssh", "config"),
@@ -92,10 +101,10 @@ export async function readSshConfigAliases(
 	if (text.length > MAX_CONFIG_BYTES) return [];
 	const aliases: string[] = [];
 	for (const line of text.split("\n")) {
-		const match = /^\s*(host|include)\s*[=\s]\s*(.+?)\s*$/i.exec(line);
-		if (!match?.[2]) continue;
-		const values = match[2].split(/\s+/);
-		if (match[1]?.toLowerCase() === "host") {
+		const [keyword, value] = sshDirective(line);
+		if (!value || (keyword !== "host" && keyword !== "include")) continue;
+		const values = value.split(/\s+/);
+		if (keyword === "host") {
 			aliases.push(...values.filter((value) => HOST_PATTERN.test(value)));
 		} else if (depth < 4) {
 			for (const value of values.filter((value) => !/[*?[]/.test(value))) {

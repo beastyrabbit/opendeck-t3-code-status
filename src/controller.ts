@@ -6,7 +6,7 @@ import {
 } from "./opendeck.js";
 import { getAccessibleTitle, isAlerting, renderKey } from "./render.js";
 import { parseSshHosts } from "./ssh-pairing.js";
-import { LiveConnectionError } from "./t3-protocol.js";
+import { LiveConnectionError, parsePairingLink } from "./t3-protocol.js";
 import { discoverTailnetHosts, isTailnetHost, sshPairingIssuer } from "./tailnet.js";
 import {
 	ACTION_UUID,
@@ -390,64 +390,9 @@ export class T3CodeController {
 		switch (event.payload.command) {
 			case "pair":
 			case "pairSsh":
-			case "removeConnection": {
-				if (!this.trackInspectorContext(event.context, event.action)) return;
-				if (this.authInFlight) {
-					this.sendToInspector(event.context, {
-						type: "pairingResult",
-						error: "busy",
-					});
-					return;
-				}
-				const payload = event.payload;
-				const context = event.context;
-				if (
-					payload.command === "pair" &&
-					(typeof payload.link !== "string" || payload.link.length > 16_384 || !this.client.pair)
-				)
-					return;
-				if (
-					payload.command === "pairSsh" &&
-					(typeof payload.hosts !== "string" || payload.hosts.length > 4096 || !this.client.pair)
-				)
-					return;
-				if (
-					payload.command === "removeConnection" &&
-					(typeof payload.environmentId !== "string" ||
-						payload.environmentId.length > 1024 ||
-						!this.client.remove)
-				)
-					return;
-				this.broadcastConnectionStatus(this.lastConnectionStatus, true);
-				this.authInFlight = (async () => {
-					let error: string | undefined;
-					let hosts: { host: string; error?: string }[] | undefined;
-					try {
-						if (payload.command === "pair")
-							await this.client.pair?.(payload.link as string, payload.allowHttp === true);
-						else if (payload.command === "pairSsh")
-							hosts = await this.pairOverSsh(payload.hosts as string, payload.allowHttp === true);
-						else await this.client.remove?.(payload.environmentId as string);
-					} catch (cause) {
-						error = clientErrorCode(cause);
-					}
-					const status = await this.client.getConnectionStatus();
-					this.rememberConnectionStatus(status);
-					this.broadcastConnectionStatus(status, false);
-					if (!this.disposed)
-						this.sendToInspector(context, {
-							type: "pairingResult",
-							...(error ? { error } : {}),
-							...(hosts ? { hosts } : {}),
-						});
-					this.scheduleRefresh(this.visibleContexts.keys(), true);
-				})()
-					.catch(() => undefined)
-					.finally(() => {
-						this.authInFlight = undefined;
-					});
+			case "removeConnection":
+				this.handleAuthCommand(event.context, event.action, event.payload);
 				break;
-			}
 			case "discoverHosts": {
 				if (!this.trackInspectorContext(event.context, event.action)) return;
 				if (this.discoveryContexts) {
@@ -470,6 +415,83 @@ export class T3CodeController {
 				this.queueConnectionStatusReport(event.context);
 				break;
 			}
+		}
+	}
+
+	/** Pairs or removes environments one command at a time, then reports the result to the inspector. */
+	private handleAuthCommand(
+		context: string,
+		action: string | undefined,
+		payload: Record<string, unknown>,
+	): void {
+		if (!this.trackInspectorContext(context, action)) return;
+		if (this.authInFlight) {
+			this.sendToInspector(context, { type: "pairingResult", error: "busy" });
+			return;
+		}
+		if (!this.isValidAuthCommand(payload)) return;
+		this.broadcastConnectionStatus(this.lastConnectionStatus, true);
+		this.authInFlight = (async () => {
+			let error: string | undefined;
+			let hosts: { host: string; error?: string }[] | undefined;
+			try {
+				hosts = await this.runAuthCommand(payload);
+			} catch (cause) {
+				error = clientErrorCode(cause);
+			}
+			const status = await this.client.getConnectionStatus();
+			this.rememberConnectionStatus(status);
+			this.broadcastConnectionStatus(status, false);
+			if (!this.disposed)
+				this.sendToInspector(context, {
+					type: "pairingResult",
+					...(error ? { error } : {}),
+					...(hosts ? { hosts } : {}),
+				});
+			this.scheduleRefresh(this.visibleContexts.keys(), true);
+		})()
+			.catch(() => undefined)
+			.finally(() => {
+				this.authInFlight = undefined;
+			});
+	}
+
+	private isValidAuthCommand(payload: Record<string, unknown>): boolean {
+		switch (payload.command) {
+			case "pair":
+				return typeof payload.link === "string" && payload.link.length <= 16_384 && !!this.client.pair;
+			case "pairSsh":
+				return typeof payload.hosts === "string" && payload.hosts.length <= 4096 && !!this.client.pair;
+			default:
+				return (
+					typeof payload.environmentId === "string" &&
+					payload.environmentId.length <= 1024 &&
+					!!this.client.remove
+				);
+		}
+	}
+
+	/** Runs a validated auth command; SSH pairing returns a result per host. */
+	private async runAuthCommand(
+		payload: Record<string, unknown>,
+	): Promise<{ host: string; error?: string }[] | undefined> {
+		const allowHttp = payload.allowHttp === true;
+		if (payload.command === "pair") {
+			const link = payload.link as string;
+			await this.client.pair?.(link, await this.linkAllowsHttp(link, allowHttp));
+		} else if (payload.command === "pairSsh") return this.pairOverSsh(payload.hosts as string, allowHttp);
+		else await this.client.remove?.(payload.environmentId as string);
+		return undefined;
+	}
+
+	/** A pasted link may use plain HTTP when opted in, or when its server resolves only to Tailscale. */
+	private async linkAllowsHttp(link: string, allowHttp: boolean): Promise<boolean> {
+		if (allowHttp) return true;
+		try {
+			const { hostname } = new URL(parsePairingLink(link, true).origin);
+			return await this.isEncryptedNetwork(hostname.replace(/^\[|\]$/g, ""));
+		} catch {
+			return false;
 		}
 	}
 

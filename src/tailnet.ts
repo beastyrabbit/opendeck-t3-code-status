@@ -14,8 +14,8 @@ const SSH_TARGETS_TTL_MS = 10_000;
 
 // Tailscale hands out addresses only from these ranges, and traffic to them is WireGuard-encrypted.
 const TAILNET = new BlockList();
-TAILNET.addSubnet("100.64.0.0", 10, "ipv4");
-TAILNET.addSubnet("fd7a:115c:a1e0::", 48, "ipv6");
+TAILNET.addSubnet("100.64.0.0", 10, "ipv4"); // NOSONAR: Tailscale's fixed address range
+TAILNET.addSubnet("fd7a:115c:a1e0::", 48, "ipv6"); // NOSONAR: Tailscale's fixed address range
 
 export type DescriptorProbe = (origin: string) => Promise<boolean>;
 

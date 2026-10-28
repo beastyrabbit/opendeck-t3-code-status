@@ -105,6 +105,17 @@ describe("classifyThread", () => {
 			expected: "working",
 		},
 		{
+			name: "a plan run that waits on a subagent is still working",
+			source: {
+				status: "running",
+				activityRunStatus: "running",
+				interactionMode: "plan",
+				hasActionableProposedPlan: true,
+				pendingBackgroundTasks: [{ kind: "subagent", awaited: false }],
+			},
+			expected: "working",
+		},
+		{
 			name: "a usage limit waits for its reset",
 			source: { status: "failed", limitRecovery: true },
 			expected: "limited",
@@ -184,6 +195,16 @@ describe("isRelevantThread", () => {
 		assert.equal(isRelevantThread(thread({ settledOverride: "settled", status: "completed" }), NOW), false);
 		assert.equal(isRelevantThread(thread({ settledOverride: "settled", status: "failed" }), NOW), false);
 		assert.equal(isRelevantThread(running({ settledOverride: "settled" }), NOW), true);
+		assert.equal(
+			isRelevantThread(
+				running({
+					settledOverride: "settled",
+					pendingBackgroundTasks: [{ kind: "subagent", awaited: false }],
+				}),
+				NOW,
+			),
+			true,
+		);
 		assert.equal(
 			isRelevantThread(
 				thread({ settledOverride: "settled", pendingRuntimeRequest: { kind: "command" } }),
