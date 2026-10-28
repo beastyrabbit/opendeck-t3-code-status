@@ -477,6 +477,14 @@ function normalizeConnectionStatus(status) {
 }
 
 function connectedDetail(status) {
+	// Machines that are offline or still connecting are left out of the counts.
+	const missing = connections
+		.filter((item) => item.state !== "connected")
+		.map((item) => String(item.label).slice(0, 80));
+	if (missing.length > 0) {
+		const live = status.environments - missing.length;
+		return `${live} of ${status.environments} Environments live · not counted: ${missing.join(", ")}`;
+	}
 	const environmentLabel =
 		status.environments === 1 ? "1 Environment" : `${status.environments} Environments`;
 	return `${environmentLabel} · live stream · read only`;

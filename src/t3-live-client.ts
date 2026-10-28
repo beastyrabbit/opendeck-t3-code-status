@@ -207,17 +207,7 @@ export class T3LiveClient {
 			state: env.state,
 			...(env.error ? { error: env.error } : {}),
 		}));
-		const state = this.loadError
-			? "error"
-			: connections.length === 0
-				? "pairing-required"
-				: connections.some((env) => env.state === "authorization-required")
-					? "authorization-required"
-					: connections.every((env) => env.state === "connected")
-						? "connected"
-						: connections.some((env) => env.state === "connecting")
-							? "connecting"
-							: "offline";
+		const state = this.loadError ? "error" : overallState(connections);
 		return {
 			state,
 			origin: connections[0]?.origin ?? "",
@@ -238,6 +228,7 @@ export class T3LiveClient {
 		}
 		const summary = emptySummary();
 		for (const env of this.environments.values()) {
+			if (env.state !== "connected") continue;
 			const part = summarizeSnapshot(
 				{
 					snapshotSequence: env.sequence ?? 0,
@@ -517,6 +508,14 @@ export class T3LiveClient {
 			signal?.removeEventListener("abort", abort);
 		}
 	}
+}
+
+/** One state for all environments. Unreachable ones are left out of the counts instead of blanking the key. */
+function overallState(connections: EnvironmentStatus[]): Exclude<ConnectionStatus["state"], "error"> {
+	if (connections.length === 0) return "pairing-required";
+	if (connections.some((env) => env.state === "authorization-required")) return "authorization-required";
+	if (connections.some((env) => env.state === "connected")) return "connected";
+	return connections.some((env) => env.state === "connecting") ? "connecting" : "offline";
 }
 
 /** Maps a refused WebSocket upgrade to the state the key shows. */

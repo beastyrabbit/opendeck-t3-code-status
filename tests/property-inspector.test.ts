@@ -593,6 +593,35 @@ test("malformed bounded messages are ignored and a later valid message still ren
 
 	assert.equal(elements.get("connection-state")?.textContent, "Connected");
 	assert.equal(elements.get("connection-detail")?.textContent, "2 Environments · live stream · read only");
+	const environment = (label: string, state: string) => ({
+		environmentId: label,
+		label,
+		origin: `http://${label}:3773`,
+		expiresAt: "2030-01-01T00:00:00.000Z",
+		state,
+	});
+	connection.emit("message", {
+		data: JSON.stringify({
+			event: "sendToPropertyInspector",
+			payload: {
+				status: {
+					environments: 3,
+					state: "connected",
+					connections: [
+						environment("anvil", "connected"),
+						environment("kiln", "connected"),
+						environment("devbox", "offline"),
+					],
+				},
+				type: "connectionStatus",
+			},
+		}),
+	});
+	assert.equal(elements.get("connection-state")?.textContent, "Connected");
+	assert.equal(
+		elements.get("connection-detail")?.textContent,
+		"2 of 3 Environments live · not counted: devbox",
+	);
 	assert.deepEqual(connection.closeCalls, []);
 });
 

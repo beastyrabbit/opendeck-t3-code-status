@@ -9,6 +9,7 @@ All notable changes to T3 Code Status are recorded here.
 - Add five themes for every key type: Counter, Pictogram, Flood, Gauge, and Quad.
 - Add an **Overview** action: one key that shows running threads (and how many of them only wait), requests for you, finished threads you have not opened yet, and errors at once, in every theme. It never blinks. The Quad theme's Thread status key now switches to the most urgent state like the other themes.
 - The Thread status key shows finished threads you have not opened yet, after requests, failures, and usage limits. Background tasks are now grey; cyan marks finished, unseen threads.
+- A paired machine that is offline no longer turns every key **OFF**: the keys count the machines they can reach, and the settings panel names the ones left out.
 - Add **Pair machines over SSH**: one button creates a read-only pairing token on each listed machine through `ssh` and its `t3` command and pairs it, without showing the token. Pressing it again renews every expired authorization.
 - Add **Find**, which lists the machines on your Tailscale network that run T3 Code. Hosts on Tailscale addresses pair over HTTP without the unencrypted-HTTP opt-in.
 - **Pair all** reaches Tailscale devices through the matching SSH alias, finds `t3` in `~/.local/bin` and `~/.t3/bin`, and pairs Windows machines through the T3 Code app's own CLI.

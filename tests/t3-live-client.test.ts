@@ -191,7 +191,10 @@ async function until(client: T3LiveClient, predicate: () => Promise<boolean>) {
 	});
 }
 async function connected(client: T3LiveClient) {
-	await until(client, async () => (await client.getConnectionStatus()).state === "connected");
+	await until(client, async () => {
+		const status = await client.getConnectionStatus();
+		return "connections" in status && status.connections.every((env) => env.state === "connected");
+	});
 }
 
 test("pairing exchanges only read scope, streams input changes and removals without polling", async (context) => {
@@ -460,7 +463,7 @@ function firstSocket(sockets: WebSocket[]): WebSocket {
 	return socket;
 }
 
-test("multiple environments aggregate independently and offline environments never produce partial live totals", async (context) => {
+test("multiple environments aggregate independently and unreachable environments are left out of the totals", async (context) => {
 	const a = await fixture(context);
 	const b = await fixture(context);
 	b.setIdentity("env-2");
@@ -474,8 +477,18 @@ test("multiple environments aggregate independently and offline environments nev
 	assert.equal((await client.getSnapshot()).summary.total, 2);
 	assert.equal(a.subscriptions.length, 1);
 	assert.equal(b.subscriptions.length, 1);
-	b.setRejected(true);
+	// A machine that stops answering drops out of the counts; the others keep showing.
+	b.setProtocolVersion(3);
 	firstSocket(b.sockets).terminate();
+	await until(client, async () => {
+		const status = await client.getConnectionStatus();
+		return "connections" in status && status.connections.some((env) => env.state === "offline");
+	});
+	assert.equal((await client.getConnectionStatus()).state, "connected");
+	assert.equal((await client.getSnapshot()).summary.total, 1);
+	// An expired authorization still asks for re-pairing, because only the user can fix it.
+	b.setProtocolVersion(2);
+	b.setRejected(true);
 	await until(client, async () => (await client.getConnectionStatus()).state === "authorization-required");
 	await assert.rejects(client.getSnapshot(), { code: "authorization-required" });
 	await client.remove("env-2");
