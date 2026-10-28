@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { ACTION_UUID, PLUGIN_UUID } from "../src/types.js";
+import { ACTION_UUID, OVERVIEW_ACTION_UUID, PLUGIN_UUID } from "../src/types.js";
 import { PLUGIN_DIRECTORY } from "./profile.js";
 
 const SETUP_NAME = `${PLUGIN_UUID}-opendeck-setup`;
@@ -153,45 +153,55 @@ async function verifyManifest(path: string, expectedVersion: string): Promise<vo
 	);
 	assert.deepEqual(manifest.Nodejs, { Version: "20" }, "manifest must require the tested Node runtime");
 	const actions = Array.isArray(manifest.Actions) ? manifest.Actions : [];
-	assert.equal(actions.length, 1, "manifest must contain exactly one focused action");
-	const action = actions[0];
-	assert.ok(isRecord(action), "manifest action is not an object");
-	assert.deepEqual(
-		{
-			Controllers: action.Controllers,
-			DisableAutomaticStates: action.DisableAutomaticStates,
-			Icon: action.Icon,
-			Name: action.Name,
-			PropertyInspectorPath: action.PropertyInspectorPath,
-			SupportedInMultiActions: action.SupportedInMultiActions,
-			UserTitleEnabled: action.UserTitleEnabled,
-			UUID: action.UUID,
-		},
-		{
-			Controllers: ["Keypad"],
-			DisableAutomaticStates: true,
-			Icon: "icons/action",
-			Name: "Thread status",
-			PropertyInspectorPath: "property-inspector/index.html",
-			SupportedInMultiActions: false,
-			UserTitleEnabled: false,
-			UUID: ACTION_UUID,
-		},
-		"manifest thread overview action metadata differs from the packaged files",
+	const expected = [
+		{ Name: "Thread status", UUID: ACTION_UUID },
+		{ Name: "Overview", UUID: OVERVIEW_ACTION_UUID },
+	];
+	assert.equal(
+		actions.length,
+		expected.length,
+		"manifest must contain the Thread status and Overview actions",
 	);
-	assert.deepEqual(
-		action.States,
-		[
+	for (const [index, { Name, UUID }] of expected.entries()) {
+		const action = actions[index];
+		assert.ok(isRecord(action), `manifest action ${Name} is not an object`);
+		assert.deepEqual(
 			{
-				FontSize: 0,
-				Image: "icons/action",
-				ShowTitle: false,
-				Title: "Loading T3 Code status",
-				TitleAlignment: "middle",
+				Controllers: action.Controllers,
+				DisableAutomaticStates: action.DisableAutomaticStates,
+				Icon: action.Icon,
+				Name: action.Name,
+				PropertyInspectorPath: action.PropertyInspectorPath,
+				SupportedInMultiActions: action.SupportedInMultiActions,
+				UserTitleEnabled: action.UserTitleEnabled,
+				UUID: action.UUID,
 			},
-		],
-		"manifest must keep the dynamic status text without drawing it over the key image",
-	);
+			{
+				Controllers: ["Keypad"],
+				DisableAutomaticStates: true,
+				Icon: "icons/action",
+				Name,
+				PropertyInspectorPath: "property-inspector/index.html",
+				SupportedInMultiActions: false,
+				UserTitleEnabled: false,
+				UUID,
+			},
+			`manifest ${Name} action metadata differs from the packaged files`,
+		);
+		assert.deepEqual(
+			action.States,
+			[
+				{
+					FontSize: 0,
+					Image: "icons/action",
+					ShowTitle: false,
+					Title: "Loading T3 Code status",
+					TitleAlignment: "middle",
+				},
+			],
+			"manifest must keep the dynamic status text without drawing it over the key image",
+		);
+	}
 }
 
 async function verifyLiveBundle(pluginRoot: string): Promise<void> {

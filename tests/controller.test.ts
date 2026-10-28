@@ -943,14 +943,16 @@ test("tailnet discovery reports found hosts, and tailnet hosts pair over HTTP wi
 		isEncryptedNetwork: async (hostname) => hostname === "anvil",
 		issuePairingLink: async (target) => `http://${target}/pair#token=fixture`,
 	});
+	// A second inspector that asks while discovery runs gets the same result, without a second run.
 	controller.handle(event("sendToPlugin", "key-a", { command: "discoverHosts" }));
-	controller.handle(event("sendToPlugin", "key-a", { command: "discoverHosts" }));
+	controller.handle(event("sendToPlugin", "key-b", { command: "discoverHosts" }));
 	await new Promise((resolve) => setImmediate(resolve));
 	assert.equal(discoveries, 1);
-	assert.deepEqual(host.inspectorMessages.at(-1)?.payload, {
-		type: "discoveryResult",
-		hosts: ["anvil", "kiln"],
-	});
+	for (const context of ["key-a", "key-b"])
+		assert.deepEqual(host.inspectorMessages.findLast((message) => message.context === context)?.payload, {
+			type: "discoveryResult",
+			hosts: ["anvil", "kiln"],
+		});
 
 	controller.handle(event("sendToPlugin", "key-a", { command: "pairSsh", hosts: "anvil:3774, kiln" }));
 	await new Promise((resolve) => setImmediate(resolve));

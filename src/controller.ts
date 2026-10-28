@@ -93,7 +93,8 @@ export class T3CodeController {
 	private disposed = false;
 	private unsubscribe?: () => void;
 	private authInFlight?: Promise<void>;
-	private discoveryInFlight = false;
+	/** Inspectors waiting for the running discovery; each gets its result. */
+	private discoveryContexts?: Set<string>;
 	private lastConnectionError?: string;
 	private lastConnectionStatus: ConnectionStatus = { state: "offline" };
 	private refreshInFlight?: Promise<void>;
@@ -448,16 +449,19 @@ export class T3CodeController {
 				break;
 			}
 			case "discoverHosts": {
-				if (!this.trackInspectorContext(event.context, event.action) || this.discoveryInFlight) return;
-				const context = event.context;
-				this.discoveryInFlight = true;
+				if (!this.trackInspectorContext(event.context, event.action)) return;
+				if (this.discoveryContexts) {
+					this.discoveryContexts.add(event.context);
+					return;
+				}
+				const contexts = new Set([event.context]);
+				this.discoveryContexts = contexts;
 				void this.discoverHosts()
 					.catch(() => [])
 					.then((hosts) => {
-						if (!this.disposed) this.sendToInspector(context, { type: "discoveryResult", hosts });
-					})
-					.finally(() => {
-						this.discoveryInFlight = false;
+						this.discoveryContexts = undefined;
+						if (this.disposed) return;
+						for (const context of contexts) this.sendToInspector(context, { type: "discoveryResult", hosts });
 					});
 				break;
 			}
