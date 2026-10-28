@@ -111,7 +111,7 @@ OpenDeck needs network access to each paired T3 server. For a Flatpak installati
 
 ## Which threads count
 
-The plugin counts open top-level threads from every paired environment's shell stream and applies the same rules as T3 Code's sidebar. Archived threads and subagents do not count; a subagent waiting for approval flags its parent thread instead. Settled threads do not count unless they are working or waiting for you. Snoozed threads normally do not count; they reappear when they request approval or input, receive a guest message, or fail after the snooze. A completed run no longer wakes a snoozed thread. Runs that are preparing, queued, starting, running, or finishing count as work, as does background work the agent waits for. A command or monitor the agent left running, such as a dev server, counts as waiting.
+The plugin counts open top-level threads from every paired environment's shell stream and applies the same rules as T3 Code's sidebar. Archived threads and subagents do not count; a subagent waiting for approval flags its parent thread instead. Settled threads do not count unless they are working, waiting for you, or have a guest message waiting. Snoozed threads normally do not count; they reappear when they request approval or input, receive a guest message, or fail after the snooze. A completed run no longer wakes a snoozed thread. Runs that are preparing, queued, starting, running, or finishing count as work, as does background work the agent waits for. A command or monitor the agent left running, such as a dev server, counts as waiting.
 
 OpenDeck also exposes the same changing status as the key's accessible label.
 
@@ -186,9 +186,9 @@ Credentials are stored separately from OpenDeck profiles and the plugin installa
 
 On reconnect the plugin checks the server's environment identity, gets a fresh ticket, and loads a fresh shell snapshot before continuing live updates. This also works with servers that lack optional replay-completion markers. Stream state stays in memory. Messages and retained thread counts are bounded.
 
-This uses T3's existing first-party interface, which is not a versioned public SDK. Protocol reference: T3 Code commit `e16b8b059c9f5ff6dfed1addecffb831c6aee043`, following [the maintainer's guidance](https://github.com/pingdotgg/t3code/issues/10929#issuecomment-5601670045). Future T3 changes may require a plugin update.
+This uses T3's existing first-party interface, which is not a versioned public SDK. Protocol reference: T3 Code 0.1 with orchestration protocol 2, following [the maintainer's guidance](https://github.com/pingdotgg/t3code/issues/10929#issuecomment-5601670045). Future T3 changes may require a plugin update.
 
-The plugin uses a three-day age-based settlement default and does not import per-client sidebar preferences or pull-request state. Counts can differ from a T3 sidebar configured with other settlement rules.
+Settlement comes from T3 Code itself: the plugin reads each thread's server-side settled state and does not import per-client sidebar preferences. Counts can differ from a T3 sidebar configured with other local display rules.
 
 ## Build from source
 

@@ -2,7 +2,7 @@
 
 All notable changes to T3 Code Status are recorded here.
 
-## Unreleased
+## 0.4.0
 
 - Redesign the keys for 2 cm displays: one large number or symbol per key, and a distinct shape for every status colour.
 - Add separate key types for working threads, all requests, approvals, questions, plan reviews, failures, usage limits, background tasks, and waiting threads. Existing "Threads only" and "Questions only" keys become Working and Needs you keys.
@@ -15,7 +15,6 @@ All notable changes to T3 Code Status are recorded here.
 - **Pair all** reaches Tailscale devices through the matching SSH alias, finds `t3` in `~/.local/bin` and `~/.t3/bin`, and pairs Windows machines through the T3 Code app's own CLI.
 - Lay out the key settings side by side for OpenDeck's wide settings strip, with larger text and the pairing notes folded away.
 - Show distinct PAIR, RE-PAIR, and VERSION states for missing pairing, expired authorization, and unsupported T3 versions.
-
 - Support T3 Code 0.1 and its orchestration protocol 2. The plugin declares the protocol when it connects and parses the V2 thread shell stream. Earlier plugin builds cannot read T3 Code 0.1 and show an error.
 - Derive working, approval, question, plan, failure, and background states with the same rules as T3 Code's client. Usage-limit pauses are tracked separately, and a live subagent's approval now flags its parent thread.
 - Leave settlement to T3 Code's server-side auto-settlement instead of applying a local three-day rule.
