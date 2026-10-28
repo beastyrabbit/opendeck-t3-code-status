@@ -45,7 +45,6 @@
 		"@types/ws": "^8.18.1",
 		"esbuild": "^0.28.2",
 		"lefthook": "^2.1.12",
-		"snappyjs": "^0.7.0",
 		"tsx": "^4.23.13",
 		"typescript": "^7.0.2"
 	}

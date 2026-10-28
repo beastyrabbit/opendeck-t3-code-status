@@ -168,8 +168,10 @@ function migrateStateList(owner: Record<string, unknown>, fallbackImage: string)
 			changed = true;
 			continue;
 		}
-		if (state.show !== true) {
-			state.show = true;
+		// OpenDeck draws a shown title even at size 0, over the key image. The text stays for
+		// accessibility, hidden.
+		if (state.show !== false) {
+			state.show = false;
 			changed = true;
 		}
 		if (state.size !== 0) {
@@ -193,7 +195,7 @@ function actionState(image: string): Record<string, unknown> {
 		image,
 		image_scale: 100,
 		name: "",
-		show: true,
+		show: false,
 		size: 0,
 		stroke_colour: "#000000",
 		stroke_size: 3,

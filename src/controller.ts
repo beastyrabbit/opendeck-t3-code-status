@@ -4,19 +4,23 @@ import {
 	type OpenDeckConnection,
 	type OpenDeckEvent,
 } from "./opendeck.js";
-import { getAccessibleTitle, hasOpenQuestions, renderDashboard } from "./render.js";
-import type { T3ClientSnapshot } from "./t3-client.js";
-import { T3ClientError } from "./t3-error.js";
-import { LiveConnectionError } from "./t3-protocol.js";
+import { getAccessibleTitle, isAlerting, renderKey } from "./render.js";
+import { parseSshHosts } from "./ssh-pairing.js";
+import { LiveConnectionError, parsePairingLink } from "./t3-protocol.js";
+import { discoverTailnetHosts, isTailnetHost, sshPairingIssuer } from "./tailnet.js";
 import {
 	ACTION_UUID,
+	ACTION_UUIDS,
 	type ActionSettings,
 	type ConnectionStatus,
 	type DashboardModel,
 	DEFAULT_REFRESH_SECONDS,
 	type NormalizedSettings,
 	normalizeSettings,
+	OVERVIEW_ACTION_UUID,
+	type RenderMode,
 	SETTINGS_VERSION,
+	type T3ClientSnapshot,
 } from "./types.js";
 
 const ANIMATION_INTERVAL_MS = 500;
@@ -24,7 +28,6 @@ const CONNECTION_STATUS_CACHE_MS = 1_000;
 const COMMAND_BURST_WINDOW_MS = 250;
 const ERROR_RETRY_INTERVAL_MS = 5_000;
 const LEGACY_REFRESH_SECONDS = 15;
-const RING_PROGRESS_STEPS = 20;
 
 export interface T3StatusClient {
 	subscribe?(listener: () => void): () => void;
@@ -38,16 +41,23 @@ export interface T3StatusClient {
 
 export interface T3CodeControllerOptions {
 	animationIntervalMs?: number;
+	/** Creates a read-only pairing link on a host; SSH by default. */
+	issuePairingLink?: (host: string) => Promise<string>;
+	/** Lists hosts that run T3; Tailscale peers by default. */
+	discoverHosts?: () => Promise<string[]>;
+	/** Whether plain HTTP to a host is safe without the user's opt-in; true for tailnet addresses by default. */
+	isEncryptedNetwork?: (hostname: string) => Promise<boolean>;
 	now?: () => number;
 }
 
 interface VisibleContext {
+	action: string;
 	context: string;
 	cycleStartedAt: number;
 	lastRenderedModel?: DashboardModel;
-	lastRenderedMode?: NormalizedSettings["displayMode"];
+	lastRenderedMode?: RenderMode;
+	lastRenderedTheme?: NormalizedSettings["theme"];
 	lastRenderedAlertPhase?: boolean;
-	lastRenderedProgressStep?: number;
 	lastRenderedTitle?: string;
 	model: DashboardModel;
 	settings: NormalizedSettings;
@@ -62,7 +72,11 @@ interface ConnectionStatusMessage {
 
 export class T3CodeController {
 	private readonly animationIntervalMs: number;
-	private readonly inspectorContexts = new Set<string>();
+	private readonly issuePairingLink: (host: string) => Promise<string>;
+	private readonly discoverHosts: () => Promise<string[]>;
+	private readonly isEncryptedNetwork: (hostname: string) => Promise<boolean>;
+	/** Open settings panels, with the action of their key. */
+	private readonly inspectorContexts = new Map<string, string>();
 	private readonly lastForcedRefreshAt = new Map<string, number>();
 	private readonly lastInspectorStatusRequestAt = new Map<string, number>();
 	private readonly now: () => number;
@@ -79,6 +93,8 @@ export class T3CodeController {
 	private disposed = false;
 	private unsubscribe?: () => void;
 	private authInFlight?: Promise<void>;
+	/** Inspectors waiting for the running discovery; each gets its result. */
+	private discoveryContexts?: Set<string>;
 	private lastConnectionError?: string;
 	private lastConnectionStatus: ConnectionStatus = { state: "offline" };
 	private refreshInFlight?: Promise<void>;
@@ -90,17 +106,20 @@ export class T3CodeController {
 	) {
 		this.animationIntervalMs = options.animationIntervalMs ?? ANIMATION_INTERVAL_MS;
 		this.now = options.now ?? Date.now;
+		this.issuePairingLink = options.issuePairingLink ?? sshPairingIssuer();
+		this.discoverHosts = options.discoverHosts ?? (() => discoverTailnetHosts());
+		this.isEncryptedNetwork = options.isEncryptedNetwork ?? ((hostname) => isTailnetHost(hostname));
 		this.unsubscribe = client.subscribe?.(() => {
 			if (this.disposed) return;
 			this.connectionStatusKnown = false;
 			this.scheduleRefresh(this.visibleContexts.keys(), true);
-			for (const context of this.inspectorContexts) this.pendingConnectionStatusContexts.add(context);
+			for (const context of this.inspectorContexts.keys()) this.pendingConnectionStatusContexts.add(context);
 			this.startConnectionStatusReports();
 		});
 	}
 
 	handle(event: OpenDeckEvent): void {
-		if (this.disposed || event.action !== ACTION_UUID) return;
+		if (this.disposed || !event.action || !ACTION_UUIDS.includes(event.action)) return;
 		switch (event.event) {
 			case "willAppear":
 				this.willAppear(event);
@@ -115,7 +134,7 @@ export class T3CodeController {
 				this.handleForcedRefresh(event.context);
 				break;
 			case "propertyInspectorDidAppear":
-				this.trackInspectorContext(event.context);
+				this.trackInspectorContext(event.context, event.action);
 				break;
 			case "propertyInspectorDidDisappear":
 				this.forgetInspectorContext(event.context);
@@ -153,12 +172,14 @@ export class T3CodeController {
 		const now = this.now();
 		const receivedSettings = readSettings(event.payload);
 		const settings = migrateSettings(receivedSettings);
-		this.visibleContexts.set(event.context, {
+		const visible: VisibleContext = {
+			action: event.action ?? ACTION_UUID,
 			context: event.context,
 			cycleStartedAt: now,
 			model: { kind: "loading" },
 			settings: normalizeSettings(settings),
-		});
+		};
+		this.visibleContexts.set(event.context, visible);
 		if (settings.settingsVersion !== receivedSettings?.settingsVersion) {
 			this.host.setSettings(event.context, settings);
 		}
@@ -194,16 +215,24 @@ export class T3CodeController {
 		if (!isValidOpenDeckContext(context)) return false;
 		if (this.visibleContexts.has(context) || this.inspectorContexts.has(context)) return true;
 		let trackedContexts = this.visibleContexts.size;
-		for (const inspectorContext of this.inspectorContexts) {
+		for (const inspectorContext of this.inspectorContexts.keys()) {
 			if (!this.visibleContexts.has(inspectorContext)) trackedContexts += 1;
 		}
 		return trackedContexts < MAX_OPENDECK_LIVE_CONTEXTS;
 	}
 
-	private trackInspectorContext(context: string | undefined): boolean {
+	private trackInspectorContext(context: string | undefined, action: string | undefined): boolean {
 		if (!context || !this.canTrackContext(context)) return false;
-		this.inspectorContexts.add(context);
+		this.inspectorContexts.set(context, action ?? ACTION_UUID);
 		return true;
+	}
+
+	private sendToInspector(context: string, payload: object): void {
+		this.host.sendToPropertyInspector(this.inspectorContexts.get(context) ?? ACTION_UUID, context, payload);
+	}
+
+	private renderMode(visible: VisibleContext): RenderMode {
+		return visible.action === OVERVIEW_ACTION_UUID ? "overview" : visible.settings.displayMode;
 	}
 
 	private forgetInspectorContext(context: string | undefined): void {
@@ -260,31 +289,21 @@ export class T3CodeController {
 	private renderContext(context: string, now = this.now()): void {
 		const visible = this.visibleContexts.get(context);
 		if (!visible) return;
-		const duration = this.refreshIntervalMs(visible);
-		const progress = this.client.subscribe
-			? visible.model.kind === "ready"
-				? 1
-				: 0
-			: Math.min(1, Math.max(0, (now - visible.cycleStartedAt) / duration));
-		const progressStep = Math.min(RING_PROGRESS_STEPS, Math.floor(progress * RING_PROGRESS_STEPS));
-		const mode = visible.settings.displayMode;
-		const alertPhase =
-			mode !== "threads" && hasOpenQuestions(visible.model) && Math.floor(now / 500) % 2 === 0;
+		const { theme } = visible.settings;
+		const mode = this.renderMode(visible);
+		const alertPhase = isAlerting(visible.model, mode) && Math.floor(now / 500) % 2 === 0;
 		const title = getAccessibleTitle(visible.model, mode);
 		const imageChanged =
 			visible.lastRenderedModel !== visible.model ||
-			visible.lastRenderedProgressStep !== progressStep ||
 			visible.lastRenderedMode !== mode ||
+			visible.lastRenderedTheme !== theme ||
 			visible.lastRenderedAlertPhase !== alertPhase;
 		if (imageChanged) {
 			visible.lastRenderedModel = visible.model;
-			visible.lastRenderedProgressStep = progressStep;
 			visible.lastRenderedMode = mode;
+			visible.lastRenderedTheme = theme;
 			visible.lastRenderedAlertPhase = alertPhase;
-			this.host.setImage(
-				context,
-				renderDashboard(visible.model, progressStep / RING_PROGRESS_STEPS, mode, alertPhase),
-			);
+			this.host.setImage(context, renderKey(visible.model, mode, theme, alertPhase));
 		}
 		if (visible.lastRenderedTitle !== title) {
 			visible.lastRenderedTitle = title;
@@ -370,61 +389,130 @@ export class T3CodeController {
 		if (!event.context || !isRecord(event.payload) || typeof event.payload.command !== "string") return;
 		switch (event.payload.command) {
 			case "pair":
-			case "removeConnection": {
-				if (!this.trackInspectorContext(event.context)) return;
-				if (this.authInFlight) {
-					this.host.sendToPropertyInspector(ACTION_UUID, event.context, {
-						type: "pairingResult",
-						error: "busy",
-					});
+			case "pairSsh":
+			case "removeConnection":
+				this.handleAuthCommand(event.context, event.action, event.payload);
+				break;
+			case "discoverHosts": {
+				if (!this.trackInspectorContext(event.context, event.action)) return;
+				if (this.discoveryContexts) {
+					this.discoveryContexts.add(event.context);
 					return;
 				}
-				const payload = event.payload;
-				const context = event.context;
-				if (
-					payload.command === "pair" &&
-					(typeof payload.link !== "string" || payload.link.length > 16_384 || !this.client.pair)
-				)
-					return;
-				if (
-					payload.command === "removeConnection" &&
-					(typeof payload.environmentId !== "string" ||
-						payload.environmentId.length > 1024 ||
-						!this.client.remove)
-				)
-					return;
-				this.broadcastConnectionStatus(this.lastConnectionStatus, true);
-				this.authInFlight = (async () => {
-					let error: string | undefined;
-					try {
-						if (payload.command === "pair")
-							await this.client.pair?.(payload.link as string, payload.allowHttp === true);
-						else await this.client.remove?.(payload.environmentId as string);
-					} catch (cause) {
-						error = clientErrorCode(cause);
-					}
-					const status = await this.client.getConnectionStatus();
-					this.rememberConnectionStatus(status);
-					this.broadcastConnectionStatus(status, false);
-					if (!this.disposed)
-						this.host.sendToPropertyInspector(ACTION_UUID, context, {
-							type: "pairingResult",
-							...(error ? { error } : {}),
-						});
-					this.scheduleRefresh(this.visibleContexts.keys(), true);
-				})()
-					.catch(() => undefined)
-					.finally(() => {
-						this.authInFlight = undefined;
+				const contexts = new Set([event.context]);
+				this.discoveryContexts = contexts;
+				void this.discoverHosts()
+					.catch(() => [])
+					.then((hosts) => {
+						this.discoveryContexts = undefined;
+						if (this.disposed) return;
+						for (const context of contexts) this.sendToInspector(context, { type: "discoveryResult", hosts });
 					});
 				break;
 			}
 			case "getConnectionStatus": {
-				if (!this.trackInspectorContext(event.context)) return;
+				if (!this.trackInspectorContext(event.context, event.action)) return;
 				this.queueConnectionStatusReport(event.context);
 				break;
 			}
 		}
+	}
+
+	/** Pairs or removes environments one command at a time, then reports the result to the inspector. */
+	private handleAuthCommand(
+		context: string,
+		action: string | undefined,
+		payload: Record<string, unknown>,
+	): void {
+		if (!this.trackInspectorContext(context, action)) return;
+		if (this.authInFlight) {
+			this.sendToInspector(context, { type: "pairingResult", error: "busy" });
+			return;
+		}
+		if (!this.isValidAuthCommand(payload)) return;
+		this.broadcastConnectionStatus(this.lastConnectionStatus, true);
+		this.authInFlight = (async () => {
+			let error: string | undefined;
+			let hosts: { host: string; error?: string }[] | undefined;
+			try {
+				hosts = await this.runAuthCommand(payload);
+			} catch (cause) {
+				error = clientErrorCode(cause);
+			}
+			const status = await this.client.getConnectionStatus();
+			this.rememberConnectionStatus(status);
+			this.broadcastConnectionStatus(status, false);
+			if (!this.disposed)
+				this.sendToInspector(context, {
+					type: "pairingResult",
+					...(error ? { error } : {}),
+					...(hosts ? { hosts } : {}),
+				});
+			this.scheduleRefresh(this.visibleContexts.keys(), true);
+		})()
+			.catch(() => undefined)
+			.finally(() => {
+				this.authInFlight = undefined;
+			});
+	}
+
+	private isValidAuthCommand(payload: Record<string, unknown>): boolean {
+		switch (payload.command) {
+			case "pair":
+				return typeof payload.link === "string" && payload.link.length <= 16_384 && !!this.client.pair;
+			case "pairSsh":
+				return typeof payload.hosts === "string" && payload.hosts.length <= 4096 && !!this.client.pair;
+			default:
+				return (
+					typeof payload.environmentId === "string" &&
+					payload.environmentId.length <= 1024 &&
+					!!this.client.remove
+				);
+		}
+	}
+
+	/** Runs a validated auth command; SSH pairing returns a result per host. */
+	private async runAuthCommand(
+		payload: Record<string, unknown>,
+	): Promise<{ host: string; error?: string }[] | undefined> {
+		const allowHttp = payload.allowHttp === true;
+		if (payload.command === "pair") {
+			const link = payload.link as string;
+			await this.client.pair?.(link, await this.linkAllowsHttp(link, allowHttp));
+		} else if (payload.command === "pairSsh") return this.pairOverSsh(payload.hosts as string, allowHttp);
+		else await this.client.remove?.(payload.environmentId as string);
+		return undefined;
+	}
+
+	/** A pasted link may use plain HTTP when opted in, or when its server resolves only to Tailscale. */
+	private async linkAllowsHttp(link: string, allowHttp: boolean): Promise<boolean> {
+		if (allowHttp) return true;
+		try {
+			const { hostname } = new URL(parsePairingLink(link, true).origin);
+			return await this.isEncryptedNetwork(hostname.replace(/^\[|\]$/g, ""));
+		} catch {
+			return false;
+		}
+	}
+
+	/** Creates pairing links on every host at once, then pairs them one by one. */
+	private async pairOverSsh(list: string, allowHttp: boolean): Promise<{ host: string; error?: string }[]> {
+		const hosts = parseSshHosts(list);
+		const links = await Promise.allSettled(hosts.map((host) => this.issuePairingLink(host)));
+		const results: { host: string; error?: string }[] = [];
+		for (const [index, host] of hosts.entries()) {
+			const link = links[index];
+			try {
+				if (link?.status !== "fulfilled") throw link?.reason;
+				if (this.disposed) break;
+				const hostname = host.split(":")[0] ?? host;
+				await this.client.pair?.(link.value, allowHttp || (await this.isEncryptedNetwork(hostname)));
+				results.push({ host });
+			} catch (cause) {
+				results.push({ host, error: clientErrorCode(cause) });
+			}
+		}
+		return results;
 	}
 
 	private queueConnectionStatusReport(context: string): void {
@@ -509,7 +597,8 @@ export class T3CodeController {
 	}
 
 	private broadcastConnectionStatus(status: ConnectionStatus, busy: boolean, error?: string): void {
-		for (const context of this.inspectorContexts) this.sendConnectionStatus(context, status, busy, error);
+		for (const context of this.inspectorContexts.keys())
+			this.sendConnectionStatus(context, status, busy, error);
 	}
 
 	private sendConnectionStatus(
@@ -525,7 +614,7 @@ export class T3CodeController {
 			type: "connectionStatus",
 			...(error ? { error } : {}),
 		};
-		this.host.sendToPropertyInspector(ACTION_UUID, context, payload);
+		this.sendToInspector(context, payload);
 	}
 }
 
@@ -535,10 +624,13 @@ function readSettings(payload: unknown): ActionSettings | undefined {
 	const version = payload.settings.settingsVersion;
 	const refreshSeconds =
 		typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : undefined;
+	const { displayMode, theme } = normalizeSettings({
+		displayMode: payload.settings.displayMode as ActionSettings["displayMode"],
+		theme: payload.settings.theme as ActionSettings["theme"],
+	});
 	return {
-		displayMode: normalizeSettings({
-			displayMode: payload.settings.displayMode as ActionSettings["displayMode"],
-		}).displayMode,
+		displayMode,
+		theme,
 		...(refreshSeconds === undefined ? {} : { refreshSeconds }),
 		...(typeof version === "number" ? { settingsVersion: version } : {}),
 	};
@@ -556,25 +648,16 @@ function migrateSettings(
 }
 
 function modelForClientError(error: unknown): DashboardModel {
-	if (error instanceof LiveConnectionError) {
-		if (error.code === "pairing-required" || error.code === "authorization-required")
-			return { kind: "pairing" };
-		if (error.code === "connecting") return { kind: "loading" };
-		return { kind: error.code === "offline" ? "offline" : "error" };
-	}
-	if (!(error instanceof T3ClientError)) return { kind: "error" };
-	switch (error.code) {
-		case "offline":
-			return { kind: "offline" };
-		default:
-			return { kind: "error" };
-	}
+	if (!(error instanceof LiveConnectionError)) return { kind: "error" };
+	if (error.code === "pairing-required") return { kind: "pairing" };
+	if (error.code === "authorization-required") return { kind: "reauth" };
+	if (error.code === "unsupported-version") return { kind: "unsupported" };
+	if (error.code === "connecting") return { kind: "loading" };
+	return { kind: error.code === "offline" ? "offline" : "error" };
 }
 
 function clientErrorCode(error: unknown): string {
-	return error instanceof T3ClientError || error instanceof LiveConnectionError
-		? error.code
-		: "invalid-response";
+	return error instanceof LiveConnectionError ? error.code : "invalid-response";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -1,0 +1,526 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>T3 Code OpenDeck key mockups — five concepts</title>
+<style>
+:root{--bg:#0d0e10;--fg:#d7dde3;--muted:#8b949e;--panel:#16181c;--line:#2a2e35}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 "DejaVu Sans",system-ui,sans-serif;padding:32px 40px 80px}
+h1{font-size:28px;margin:0 0 8px}
+h2{font-size:24px;margin:64px 0 4px;padding-top:28px;border-top:1px solid var(--line)}
+h2 small{color:var(--muted);font-weight:normal;font-size:15px;margin-left:10px}
+h3{font-size:13px;margin:28px 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em}
+p{max-width:900px}
+.meta{display:grid;grid-template-columns:1fr 1fr;gap:12px 40px;max-width:1100px;margin:12px 0 4px}
+.meta h4{margin:0 0 2px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.meta ul{margin:0;padding-left:18px}
+.meta li{margin:2px 0}
+.deck{display:flex;flex-wrap:wrap;gap:18px;padding:18px;background:linear-gradient(180deg,#2a2b2f,#1a1b1e);border:1px solid #000;border-radius:16px;box-shadow:inset 0 1px 0 #ffffff14,0 8px 24px #0008;width:max-content;max-width:100%}
+.deck.x2{gap:36px;padding:36px;border-radius:28px}
+figure{margin:0;display:flex;flex-direction:column;align-items:center;gap:6px}
+.face{width:76px;height:76px;border-radius:12%;overflow:hidden;background:#000;box-shadow:0 0 0 2px #050505,0 3px 6px #000c,inset 0 0 0 1px #ffffff10}
+.x2 .face{width:152px;height:152px}
+.face svg{display:block;width:100%;height:100%}
+figcaption{font-size:10px;color:var(--muted);max-width:76px;text-align:center;line-height:1.2}
+.x2 figcaption{max-width:152px;font-size:12px}
+.legend{display:flex;flex-wrap:wrap;gap:8px 22px;margin:6px 0 2px;max-width:1100px}
+.legend span{display:inline-flex;align-items:center;gap:8px;font-size:13px}
+.legend svg{width:30px;height:30px;border-radius:6px}
+table{border-collapse:collapse;margin-top:12px;max-width:1200px}
+td,th{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top;font-size:13px}
+th{background:var(--panel)}
+.note{color:var(--muted);font-size:13px;max-width:900px}
+.rec{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 20px;max-width:900px;margin-top:16px}
+.rule{display:inline-block;padding:1px 6px;border:1px solid var(--line);border-radius:4px;font-size:12px;color:var(--muted)}
+code{font-family:"DejaVu Sans Mono",monospace;font-size:13px;color:#b7c4d0}
+</style>
+</head>
+<body>
+<h1>T3 Code status keys — five visual concepts</h1>
+<p>Mockups for the OpenDeck / Stream Deck plugin. Every key is a 144×144 <code>viewBox</code> SVG built from rect, circle, path, line, polygon and text only, with the fonts <code>DejaVu Sans</code> / <code>sans-serif</code>, so any key below can be pasted into <code>src/render.ts</code> unchanged. Each concept is shown at 2× for inspection and at true physical size (76 CSS px ≈ 2 cm at 96 dpi). <strong>Judge the 1× rows from arm's length at 100 % browser zoom</strong>; that is what the user sees.</p>
+<p class="note">Design rules applied throughout: one primary glyph or numeral per key, at most one secondary element; primary numerals ≥ 56 units tall (most are 63–79); no text below 22 units; every status colour is paired with a distinct shape; "needs you" states blink (frame A / frame B shown side by side, plus a live key).</p>
+
+<h3>Shared vocabulary (used by all five concepts)</h3>
+<div class="legend" id="legend-status"></div>
+<div class="legend" id="legend-conn"></div>
+<p class="note">Combined-key priority everywhere: needs you › failed › usage limit › working › open-but-idle › nothing open. Connection states replace the content of every key type; pressing a key only retries the connection, so no key promises an action it cannot take.</p>
+
+<div id="concepts"></div>
+
+<h2>Comparison</h2>
+<table id="compare"></table>
+<div class="rec" id="rec"></div>
+
+<script>
+// ---------- palette and vocabulary ----------
+const C = {
+  key:'#0E141A', ink:'#0B1116', well:'#1C262F', dim:'#4A5862', grey:'#97A5B0', white:'#F2F6F8',
+  green:'#4CE08A', yellow:'#FFC83D', red:'#FF5A6E', cyan:'#48C8F5', violet:'#B48CFF', orange:'#FF9A3C'
+};
+const ST = {
+  working:    {c:C.green,  glyph:'tri',       name:'Working',        shape:'play triangle'},
+  needs:      {c:C.yellow, glyph:'bubble',    name:'Needs you',      shape:'speech bubble'},
+  approval:   {c:C.yellow, glyph:'bubbleCheck',name:'Approval',      shape:'bubble with check'},
+  input:      {c:C.yellow, glyph:'bubbleQ',   name:'Question',       shape:'bubble with ?'},
+  plan:       {c:C.yellow, glyph:'bubbleLines',name:'Plan ready',    shape:'bubble with ≡'},
+  failed:     {c:C.red,    glyph:'cross',     name:'Failed',         shape:'X'},
+  background: {c:C.cyan,   glyph:'gear',      name:'Background task',shape:'gear'},
+  limit:      {c:C.violet, glyph:'hourglass', name:'Usage limit',    shape:'hourglass'},
+  open:       {c:C.grey,   glyph:'ring',      name:'Open, idle',     shape:'hollow ring'},
+  none:       {c:C.dim,    glyph:'ring',      name:'Nothing open',   shape:'dim ring'}
+};
+const CONN = {
+  loading:{c:C.cyan,   glyph:'dots',    word:'',        name:'Loading / connecting'},
+  offline:{c:C.grey,   glyph:'power',   word:'OFF',     name:'Offline'},
+  pairing:{c:C.cyan,   glyph:'link',    word:'PAIR',    name:'Pairing required'},
+  auth:   {c:C.orange, glyph:'lock',    word:'RE-PAIR', name:'Authorization expired'},
+  version:{c:C.white,  glyph:'t3struck',word:'VERSION', name:'Unsupported T3 version'},
+  error:  {c:C.red,    glyph:'warn',    word:'ERROR',   name:'Error'}
+};
+const CONNS = Object.keys(CONN);
+
+// ---------- helpers ----------
+const f = v => (Math.round(v*10)/10).toString();
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function hex(h){ return [1,3,5].map(i=>parseInt(h.substr(i,2),16)); }
+function mix(a,b,t){ const pa=hex(a), pb=hex(b); return '#'+[0,1,2].map(i=>Math.round(pa[i]+(pb[i]-pa[i])*t).toString(16).padStart(2,'0')).join(''); }
+function text(x,y,str,size,fill,o={}){
+  return `<text x="${f(x)}" y="${f(y)}" text-anchor="${o.anchor||'middle'}" fill="${fill}" font-family="DejaVu Sans, sans-serif" font-size="${f(size)}" font-weight="bold"${o.spacing?` letter-spacing="${o.spacing}"`:''}>${esc(str)}</text>`;
+}
+const numSize = (n,one,two) => String(n).length>=2 ? two : one;
+const bgRect = fill => `<rect width="144" height="144" rx="17" fill="${fill}"/>`;
+const svg = inner => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 144 144" width="144" height="144">${inner}</svg>`;
+function polar(cx,cy,r,deg){ const a=deg*Math.PI/180; return `${f(cx+r*Math.cos(a))} ${f(cy+r*Math.sin(a))}`; }
+
+function bubblePath(cx,cy,s){
+  const w=s, h=0.76*s, r=0.2*s, x0=cx-w/2, y0=cy-h/2-0.08*s, yb=y0+h;
+  return `M${f(x0+r)} ${f(y0)} H${f(x0+w-r)} A${f(r)} ${f(r)} 0 0 1 ${f(x0+w)} ${f(y0+r)} V${f(yb-r)} A${f(r)} ${f(r)} 0 0 1 ${f(x0+w-r)} ${f(yb)} H${f(x0+0.46*w)} L${f(x0+0.2*w)} ${f(yb+0.2*s)} L${f(x0+0.27*w)} ${f(yb)} H${f(x0+r)} A${f(r)} ${f(r)} 0 0 1 ${f(x0)} ${f(yb-r)} V${f(y0+r)} A${f(r)} ${f(r)} 0 0 1 ${f(x0+r)} ${f(y0)} Z`;
+}
+// glyph(name, cx, cy, size, colour, backgroundColour)
+function glyph(name,cx,cy,s,c,bg){
+  bg = bg || C.key;
+  const p=(x,y)=>`${f(x)},${f(y)}`;
+  switch(name){
+    case 'tri': return `<polygon points="${p(cx-0.38*s,cy-0.48*s)} ${p(cx+0.5*s,cy)} ${p(cx-0.38*s,cy+0.48*s)}" fill="${c}" stroke="${c}" stroke-width="${f(0.1*s)}" stroke-linejoin="round"/>`;
+    case 'cross': return `<line x1="${f(cx-0.36*s)}" y1="${f(cy-0.36*s)}" x2="${f(cx+0.36*s)}" y2="${f(cy+0.36*s)}" stroke="${c}" stroke-width="${f(0.2*s)}" stroke-linecap="round"/><line x1="${f(cx+0.36*s)}" y1="${f(cy-0.36*s)}" x2="${f(cx-0.36*s)}" y2="${f(cy+0.36*s)}" stroke="${c}" stroke-width="${f(0.2*s)}" stroke-linecap="round"/>`;
+    case 'check': return `<path d="M${f(cx-0.42*s)} ${f(cy+0.02*s)} L${f(cx-0.12*s)} ${f(cy+0.32*s)} L${f(cx+0.44*s)} ${f(cy-0.32*s)}" fill="none" stroke="${c}" stroke-width="${f(0.2*s)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    case 'lines': return [-0.3,0,0.3].map(k=>`<line x1="${f(cx-0.38*s)}" y1="${f(cy+k*s)}" x2="${f(cx+0.38*s)}" y2="${f(cy+k*s)}" stroke="${c}" stroke-width="${f(0.16*s)}" stroke-linecap="round"/>`).join('');
+    case 'q': return text(cx, cy+0.4*s, '?', 1.15*s, c);
+    case 'ring': return `<circle cx="${f(cx)}" cy="${f(cy)}" r="${f(0.38*s)}" fill="none" stroke="${c}" stroke-width="${f(0.16*s)}"/>`;
+    case 'gear': { const R=0.5*s, r=0.37*s; const pts=[]; for(let k=0;k<32;k++){ const a=(k*11.25-90)*Math.PI/180; const rad=(k%4<2)?R:r; pts.push(p(cx+rad*Math.cos(a), cy+rad*Math.sin(a))); }
+      return `<polygon points="${pts.join(' ')}" fill="${c}" stroke="${c}" stroke-width="${f(0.05*s)}" stroke-linejoin="round"/><circle cx="${f(cx)}" cy="${f(cy)}" r="${f(0.15*s)}" fill="${bg}"/>`; }
+    case 'hourglass': return `<polygon points="${p(cx-0.42*s,cy-0.5*s)} ${p(cx+0.42*s,cy-0.5*s)} ${p(cx+0.42*s,cy-0.4*s)} ${p(cx+0.07*s,cy)} ${p(cx+0.42*s,cy+0.4*s)} ${p(cx+0.42*s,cy+0.5*s)} ${p(cx-0.42*s,cy+0.5*s)} ${p(cx-0.42*s,cy+0.4*s)} ${p(cx-0.07*s,cy)} ${p(cx-0.42*s,cy-0.4*s)}" fill="${c}" stroke="${c}" stroke-width="${f(0.06*s)}" stroke-linejoin="round"/>`;
+    case 'dots': return [-0.34,0,0.34].map(k=>`<circle cx="${f(cx+k*s)}" cy="${f(cy)}" r="${f(0.11*s)}" fill="${c}"/>`).join('');
+    case 'power': { const r=0.4*s, a=35*Math.PI/180; const sx=cx-r*Math.sin(a), sy=cy-r*Math.cos(a), ex=cx+r*Math.sin(a);
+      return `<path d="M${f(sx)} ${f(sy)} A${f(r)} ${f(r)} 0 1 0 ${f(ex)} ${f(sy)}" fill="none" stroke="${c}" stroke-width="${f(0.14*s)}" stroke-linecap="round"/><line x1="${f(cx)}" y1="${f(cy-0.52*s)}" x2="${f(cx)}" y2="${f(cy-0.02*s)}" stroke="${c}" stroke-width="${f(0.14*s)}" stroke-linecap="round"/>`; }
+    case 'link': { const w=0.64*s, h=0.3*s, sw=0.11*s, rot=`transform="rotate(-45 ${f(cx)} ${f(cy)})"`;
+      return `<rect x="${f(cx-0.58*s)}" y="${f(cy-h/2)}" width="${f(w)}" height="${f(h)}" rx="${f(h/2)}" fill="none" stroke="${c}" stroke-width="${f(sw)}" ${rot}/><rect x="${f(cx-0.06*s)}" y="${f(cy-h/2)}" width="${f(w)}" height="${f(h)}" rx="${f(h/2)}" fill="none" stroke="${c}" stroke-width="${f(sw)}" ${rot}/>`; }
+    case 'lock': return `<rect x="${f(cx-0.36*s)}" y="${f(cy-0.02*s)}" width="${f(0.72*s)}" height="${f(0.52*s)}" rx="${f(0.08*s)}" fill="${c}"/><path d="M${f(cx+0.2*s)} ${f(cy-0.02*s)} V${f(cy-0.26*s)} A${f(0.2*s)} ${f(0.2*s)} 0 0 0 ${f(cx-0.2*s)} ${f(cy-0.26*s)} V${f(cy-0.18*s)}" fill="none" stroke="${c}" stroke-width="${f(0.11*s)}" stroke-linecap="round"/><circle cx="${f(cx)}" cy="${f(cy+0.22*s)}" r="${f(0.07*s)}" fill="${bg}"/>`;
+    case 'warn': return `<polygon points="${p(cx,cy-0.5*s)} ${p(cx+0.54*s,cy+0.42*s)} ${p(cx-0.54*s,cy+0.42*s)}" fill="${c}" stroke="${c}" stroke-width="${f(0.1*s)}" stroke-linejoin="round"/>` + text(cx, cy+0.34*s, '!', 0.62*s, bg);
+    case 't3struck': return text(cx, cy+0.27*s, 'T3', 0.74*s, c) + `<line x1="${f(cx-0.44*s)}" y1="${f(cy+0.42*s)}" x2="${f(cx+0.44*s)}" y2="${f(cy-0.42*s)}" stroke="${bg}" stroke-width="${f(0.22*s)}" stroke-linecap="round"/><line x1="${f(cx-0.44*s)}" y1="${f(cy+0.42*s)}" x2="${f(cx+0.44*s)}" y2="${f(cy-0.42*s)}" stroke="${c}" stroke-width="${f(0.1*s)}" stroke-linecap="round"/>`;
+    case 'bubble': case 'bubbleCheck': case 'bubbleQ': case 'bubbleLines': {
+      const inner = {bubbleCheck:'check', bubbleQ:'q', bubbleLines:'lines'}[name];
+      let out = `<path d="${bubblePath(cx,cy,s)}" fill="${c}"/>`;
+      if(inner) out += glyph(inner, cx, cy-0.08*s, 0.42*s, bg, c);
+      return out; }
+  }
+  return '';
+}
+
+// ---------- scenarios ----------
+function S(o){ return Object.assign({total:0,working:0,queued:0,waiting:0,approval:0,input:0,plan:0,failed:0,background:0,limit:0}, o); }
+const SCEN = [
+  {id:'calm',      name:'Calm · 3 working of 7 (1 background)', s:S({total:7,working:3,queued:1,waiting:3,background:1})},
+  {id:'empty',     name:'Nothing open · 0/0',                  s:S({})},
+  {id:'approval',  name:'1 approval · 2 of 6 working',         s:S({total:6,working:2,waiting:3,approval:1})},
+  {id:'questions', name:'3 questions + 1 plan · 4 of 9',       s:S({total:9,working:4,waiting:1,input:3,plan:1})},
+  {id:'failed',    name:'1 failed · 2 of 5 working',           s:S({total:5,working:2,waiting:2,failed:1})},
+  {id:'limit',     name:'Usage limit ×2 · 1 of 4 working',     s:S({total:4,working:1,waiting:1,limit:2})},
+];
+const BUSY = S({total:13,working:4,queued:1,waiting:2,approval:1,input:2,plan:1,failed:1,limit:1,background:2});
+const SINGLE_SCEN = [
+  {id:'busy', name:'busy (13 open)', s:BUSY},
+  {id:'calm', name:'calm (3 of 7)', s:SCEN[0].s},
+  {id:'empty', name:'0/0', s:SCEN[1].s},
+];
+const needsOf = s => s.approval + s.input + s.plan;
+function pick(s){
+  const n = needsOf(s);
+  if(n>0) return {st:'needs', n};
+  if(s.failed>0) return {st:'failed', n:s.failed};
+  if(s.limit>0) return {st:'limit', n:s.limit};
+  if(s.total===0) return {st:'none', n:0};
+  if(s.working===0) return {st:'open', n:0};
+  return {st:'working', n:s.working};
+}
+
+// ---------- Concept 1: Counter (big numeral + colour band) ----------
+function k1(st,n,fr,o={}){
+  const col=ST[st].c, inv=!!o.blink && fr===1 && n>0;
+  const idle = st==='none' || st==='open' || !!o.zero;
+  const bg = inv ? col : C.key;
+  const numCol = inv ? C.ink : (idle ? C.dim : col);
+  const band = inv ? C.ink : (idle ? C.well : col);
+  const bandInk = inv ? col : (idle ? C.grey : C.ink);
+  const glyphCol = inv ? col : (o.zero ? mix(col,C.well,0.45) : (idle ? C.grey : C.ink));
+  const size = numSize(n,104,86);
+  let g = bgRect(bg);
+  g += `<rect x="0" y="106" width="144" height="38" rx="17" fill="${band}"/><rect x="0" y="106" width="144" height="19" fill="${band}"/>`;
+  g += glyph(ST[st].glyph, 27, 125, 24, glyphCol, band);
+  if(o.total!==undefined) g += text(134, 136, String(o.total), 30, bandInk, {anchor:'end'});
+  g += text(72, 56+0.365*size, String(n), size, numCol);
+  return g;
+}
+function conn1(k){
+  const cn=CONN[k]; const band = cn.word ? cn.c : C.well;
+  let g = bgRect(C.key);
+  g += `<rect x="0" y="106" width="144" height="38" rx="17" fill="${band}"/><rect x="0" y="106" width="144" height="19" fill="${band}"/>`;
+  g += glyph(cn.glyph, 72, 54, 64, cn.c, C.key);
+  if(cn.word) g += text(72, 134, cn.word, 24, C.ink, {spacing:1});
+  return g;
+}
+
+// ---------- Concept 2: Pictogram (icon first + count pill) ----------
+function pillTopRight(txt,fill,ink){
+  const size=30, w=Math.round(txt.length*0.7*size+22), h=42, x=140-w, y=4;
+  return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="21" fill="${fill}" stroke="${C.key}" stroke-width="5"/>` + text(x+w/2, y+h/2+0.365*size, txt, size, ink);
+}
+function pillBottomRight(txt,fill,ink){
+  const size=30, w=Math.round(txt.length*0.7*size+22), h=42, x=140-w, y=98;
+  return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="21" fill="${fill}" stroke="${C.key}" stroke-width="5"/>` + text(x+w/2, y+h/2+0.365*size, txt, size, ink);
+}
+function pillBottom(txt,fill,ink,y=104){
+  const size=22, w=Math.round(txt.length*0.68*size+26), h=34, x=72-w/2;
+  return `<rect x="${f(x)}" y="${y}" width="${w}" height="${h}" rx="17" fill="${fill}" stroke="${C.key}" stroke-width="5"/>` + text(72, y+h/2+0.365*size, txt, size, ink, {spacing:1});
+}
+function k2(st,n,fr,o={}){
+  const col=ST[st].c, inv=!!o.blink && fr===1 && n>0;
+  let g = bgRect(C.key);
+  const bubbleFamily = st==='needs' || st==='approval' || st==='input' || st==='plan';
+  if(bubbleFamily){
+    // bubble sits high-left so the count pill can live bottom-right, clear of the tail
+    const s=100, cx=66, cy=60, by=cy-0.08*s;
+    const dimCol = mix(col,C.key,0.55);
+    const fill = (o.zero || inv) ? C.key : col;
+    const stroke = o.zero ? dimCol : col;
+    g += `<path d="${bubblePath(cx,cy,s)}" fill="${fill}" stroke="${stroke}" stroke-width="${o.zero?6:(inv?8:0)}" stroke-linejoin="round"/>`;
+    const innerCol = o.zero ? dimCol : (inv ? col : C.ink);
+    if(st!=='needs') g += glyph({approval:'check',input:'q',plan:'lines'}[st], cx, by, 44, innerCol, fill);
+    else { const size=numSize(n,76,62); g += text(cx, by+0.365*size, String(n), size, innerCol); }
+    if(o.badge!==undefined && !o.zero) g += pillBottomRight(o.badge, o.badgeFill||col, o.badgeInk||C.ink);
+  } else {
+    const gc = o.zero ? mix(col,C.key,0.55) : col;
+    g += glyph(ST[st].glyph, st==='working'?78:72, 74, 94, gc, C.key);
+    if(o.badge!==undefined && !o.zero) g += pillTopRight(o.badge, o.badgeFill||col, o.badgeInk||C.ink);
+  }
+  return g;
+}
+function conn2(k){
+  const cn=CONN[k];
+  let g = bgRect(C.key) + glyph(cn.glyph, 72, cn.word?58:72, 72, cn.c, C.key);
+  if(cn.word) g += pillBottom(cn.word, cn.c, C.ink);
+  return g;
+}
+
+// ---------- Concept 3: Flood (full-key traffic light) ----------
+function k3(st,n,fr,o={}){
+  const col=ST[st].c, inv=!!o.blink && fr===1 && n>0;
+  if(o.zero) return bgRect(C.key) + glyph(ST[st].glyph, 72, 72, 60, mix(col,C.key,0.55), C.key);
+  const none = st==='none' || st==='open';
+  const bg = none ? C.well : (inv ? C.ink : col);
+  const fg = none ? C.grey : (inv ? col : C.ink);
+  let g = bgRect(bg) + glyph(ST[st].glyph, 28, 28, 28, fg, bg);
+  if(o.total!==undefined){
+    const size=numSize(n,100,84);
+    g += text(78, (size>90?70:74)+0.365*size, String(n), size, fg);
+    g += text(136, 134, '/'+o.total, 36, fg, {anchor:'end'});
+  } else {
+    const size=numSize(n,108,90);
+    g += text(76, 80+0.365*size, String(n), size, fg);
+  }
+  return g;
+}
+function conn3(k){
+  const cn=CONN[k];
+  if(k==='loading') return bgRect(C.key) + glyph('dots', 72, 72, 64, cn.c, C.key);
+  return bgRect(cn.c) + glyph(cn.glyph, 72, 58, 62, C.ink, cn.c) + text(72, 128, cn.word, 24, C.ink, {spacing:1});
+}
+
+// ---------- Concept 4: Gauge (segmented thread ring) ----------
+function arcPath(cx,cy,r,a0,a1,c,sw){
+  if(a1-a0>=359.9) return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${c}" stroke-width="${sw}"/>`;
+  const large = (a1-a0)>180 ? 1 : 0;
+  return `<path d="M${polar(cx,cy,r,a0)} A${r} ${r} 0 ${large} 1 ${polar(cx,cy,r,a1)}" fill="none" stroke="${c}" stroke-width="${sw}"/>`;
+}
+function ringArcs(groups){
+  const r=60, sw=14, gap=4;
+  const W = groups.reduce((a,g)=>a+g.w,0);
+  if(W===0) return `<circle cx="72" cy="72" r="${r}" fill="none" stroke="${C.well}" stroke-width="${sw}"/>`;
+  const N = groups.length, gapTotal = N>1 ? N*gap : 0, per=(360-gapTotal)/W;
+  let a = -90 + (N>1 ? gap/2 : 0), out='';
+  for(const g of groups){ const span=g.w*per; out += arcPath(72,72,r,a,a+span,g.c,sw); a += span+gap; }
+  return out;
+}
+// map a scenario to a list of per-thread colours; colourFor(status) decides the colour
+function threadGroups(s, colourFor){
+  const seq = [];
+  const push=(k,count)=>{ for(let i=0;i<count;i++) seq.push(colourFor(k)); };
+  push('working',s.working); push('approval',s.approval); push('input',s.input); push('plan',s.plan);
+  push('failed',s.failed); push('limit',s.limit); push('queued',s.queued); push('waiting',s.waiting);
+  if(seq.length<=12) return seq.map(c=>({c,w:1}));
+  const groups=[]; for(const c of seq){ const last=groups[groups.length-1]; if(last && last.c===c) last.w++; else groups.push({c,w:1}); }
+  return groups;
+}
+const COMBINED_COLOUR = k => ({working:C.green,approval:C.yellow,input:C.yellow,plan:C.yellow,failed:C.red,limit:C.violet,queued:C.dim,waiting:C.dim})[k];
+const subsetColour = (keys,col) => k => keys.includes(k) ? col : C.well;
+function k4(st,n,fr,o={}){
+  const col=ST[st].c, inv=!!o.blink && fr===1 && n>0;
+  const idle = st==='none' || st==='open' || !!o.zero;
+  let g = bgRect(C.key) + ringArcs(o.groups||[]);
+  if(inv) g += `<circle cx="72" cy="72" r="51" fill="${col}"/>`;
+  const numCol = inv ? C.ink : (idle ? C.dim : col);
+  const glyphCol = inv ? C.ink : (o.zero ? mix(col,C.key,0.5) : (idle ? C.grey : col));
+  const size = numSize(n,80,66);
+  g += text(72, 60+0.365*size, String(n), size, numCol);
+  g += glyph(ST[st].glyph, 72, 112, 24, glyphCol, inv?col:C.key);
+  return g;
+}
+function conn4(k){
+  const cn=CONN[k];
+  let g = bgRect(C.key) + `<circle cx="72" cy="72" r="60" fill="none" stroke="${cn.c}" stroke-width="14"${k==='loading'?' stroke-dasharray="14 9"':''}/>`;
+  g += glyph(cn.glyph, 72, cn.word?62:72, 50, cn.c, C.key);
+  if(cn.word) g += pillBottom(cn.word, cn.c, C.ink, 106);
+  return g;
+}
+
+// ---------- Concept 5: Quad (2×2 mini grid) ----------
+function cell5(x0,y0,st,n,fr,o={}){
+  const col=ST[st].c, inv=!!o.blink && fr===1 && n>0;
+  const cx=x0+32.5, cy=y0+32.5;
+  if(n===0 && st!=='open') return `<rect x="${x0}" y="${y0}" width="65" height="65" rx="9" fill="${C.key}" stroke="${C.well}" stroke-width="2"/>` + glyph(ST[st].glyph, cx, cy, 22, mix(col,C.key,0.6), C.key);
+  const fill = inv ? col : C.well, fg = inv ? C.ink : col;
+  const size = numSize(n,52,42);
+  return `<rect x="${x0}" y="${y0}" width="65" height="65" rx="9" fill="${fill}"/>` + glyph(ST[st].glyph, x0+13, y0+13, 14, fg, fill) + text(cx+5, cy+6+0.365*size, String(n), size, fg);
+}
+function combined5(s,fr){
+  let g = bgRect(C.key);
+  g += cell5(5,5,'working',s.working,fr);
+  g += cell5(74,5,'needs',needsOf(s),fr,{blink:true});
+  g += cell5(5,74,'failed',s.failed,fr);
+  if(s.limit>0) g += cell5(74,74,'limit',s.limit,fr);
+  else if(s.background>0) g += cell5(74,74,'background',s.background,fr);
+  else g += cell5(74,74, s.total>0?'open':'none', s.total, fr);
+  return g;
+}
+function k5(st,n,fr,o={}){
+  const col=ST[st].c, inv=!!o.blink && fr===1 && n>0, zero=n===0;
+  const bg = inv ? col : C.key;
+  const fg = inv ? C.ink : (zero ? C.dim : col);
+  const gcol = inv ? C.ink : (zero ? mix(col,C.key,0.5) : col);
+  const size = numSize(n,104,86);
+  return bgRect(bg) + glyph(ST[st].glyph, 28, 28, 34, gcol, bg) + text(80, 80+0.365*size, String(n), size, fg);
+}
+function conn5(k){
+  const cn=CONN[k];
+  let g = bgRect(C.key) + glyph(cn.glyph, 72, cn.word?58:72, 60, cn.c, C.key);
+  if(cn.word) g += text(72, 128, cn.word, 24, cn.c, {spacing:1});
+  return g;
+}
+
+// ---------- concept definitions ----------
+const CONCEPTS = [
+{
+  id:'counter', name:'1 · Counter', tag:'big numeral + colour band',
+  rationale:'The number is the message. One numeral 76 units tall (63 for two digits) fills the top two thirds of the key; a solid 38-unit colour band across the bottom carries the status shape on the left and the open-thread total on the right. The band doubles as the key\'s label, so an idle key still says what it is. On the combined key the numeral is the count of the most urgent state and the band takes that state\'s colour, while the open total stays in the band, so working-vs-open never disappears.',
+  keyset:['<b>Working</b> — numeral = working, band total = open','<b>Needs you</b> — approval + question + plan (one key: whatever the subtype, the next step is "go to T3")','<b>Failed</b>','<b>Usage limit</b> — because it explains why working is low','Why four: one deck row, one count per key, and nothing that would need a label to tell it apart.'],
+  legend:'green ▶ working · yellow speech-bubble needs you · red ✕ failed · violet hourglass usage limit · grey ring open-but-idle / nothing open. Shape sits in the band next to the colour.',
+  blink:'Needs-you keys alternate at ~1 Hz between frame A (dark key, yellow numeral and band) and frame B (whole key yellow, ink numeral). The inversion changes the key\'s mean brightness, which is what the eye picks up peripherally.',
+  pros:['Largest numerals of all five concepts; counts readable at 2 cm without squinting.','Band colour is a wide flat area, so it reads peripherally; shape in the band keeps it colour-blind safe.','Idle single-purpose keys keep their identity (dim shape in the band).','Trivial to draw: three primitives plus text.'],
+  cons:['Combined key hides the working count while something needs you (by design: the urgent count wins).','Band total is 22 units tall: readable, but it is the thing you have to look for.','Two-digit counts drop to 63 units.'],
+  combined:(sc,fr)=>{ if(sc.conn) return conn1(sc.conn); const s=sc.s, {st,n}=pick(s); return k1(st,n,fr,{blink:st==='needs', total:s.total}); },
+  singles:[
+    {name:'Working',    r:(s,fr)=>k1('working',s.working,fr,{zero:s.working===0,total:s.total})},
+    {name:'Needs you',  r:(s,fr)=>k1('needs',needsOf(s),fr,{zero:needsOf(s)===0,blink:true}), blink:true},
+    {name:'Failed',     r:(s,fr)=>k1('failed',s.failed,fr,{zero:s.failed===0})},
+    {name:'Usage limit',r:(s,fr)=>k1('limit',s.limit,fr,{zero:s.limit===0})},
+  ],
+  conn:conn1,
+  dropin:'numeral font-size 104 / 86 (one / two digits) centred at y≈56; band y=106..144; band glyph 24 at (27,125); total font-size 30 right-aligned at x=134.'
+},
+{
+  id:'pictogram', name:'2 · Pictogram', tag:'icon first, count in a pill',
+  rationale:'The deck becomes a row of toolbar icons. A 94-unit pictogram says what kind of thing is happening; a notification-style pill in a corner says how many. The "needs you" family is a speech bubble (the agent is talking to you). On the combined key the needs-you count sits inside the bubble, so the number you must act on is primary-sized; on the dedicated subtype keys the bubble holds ✓, ? or ≡ instead, so you know whether you will approve, answer or review when you walk over, and the count moves to the pill.',
+  keyset:['<b>Working</b> ▶ with pill count','<b>Approval</b>, <b>Question</b>, <b>Plan</b> — three bubble keys, because icons can tell the subtypes apart for free and the subtype changes how long the interruption will take','<b>Failed</b> ✕','<b>Background</b> gear — self-explanatory as an icon, hard to show any other way','Why six: pictograms are cheap to distinguish, so this concept spends keys on specificity.'],
+  legend:'▶ green working · speech bubble yellow needs you (✓ approve, ? answer, ≡ plan) · ✕ red failed · gear cyan background · hourglass violet limit · ring grey idle. The icon is the colour-blind pairing; the pill repeats the colour.',
+  blink:'Bubble keys alternate between a filled yellow bubble (ink count or glyph) and an outlined bubble (yellow count or glyph) on a dark key; the pill stays lit in both frames.',
+  pros:['Fastest recognition of <em>what</em> is happening; no learning needed.','Subtype keys tell you what you will do before you get up.','On the combined key the needs-you count is 55 units tall inside the bubble.','Icons are the colour-blind pairing, so no extra element is needed.'],
+  cons:['Every count except the combined needs-you count lives in a 22-unit pill numeral, below the "primary numeral" bar; the "3/7" pill is borderline at 2 cm.','Six keys use most of a 15-key deck row and a half.','The gear is busy at 2 cm; it reads as "a blob" more than as a gear.'],
+  combined:(sc,fr)=>{ if(sc.conn) return conn2(sc.conn); const s=sc.s, {st,n}=pick(s);
+    if(st==='needs') return k2('needs',n,fr,{blink:true,badge:`${s.working}/${s.total}`,badgeFill:C.well,badgeInk:C.white});
+    if(st==='working') return k2('working',0,fr,{badge:`${s.working}/${s.total}`});
+    if(st==='open') return k2('open',0,fr,{badge:`0/${s.total}`,badgeFill:C.well,badgeInk:C.grey});
+    if(st==='none') return k2('none',0,fr,{badge:'0/0',badgeFill:C.well,badgeInk:C.grey});
+    return k2(st,n,fr,{badge:String(n)}); },
+  singles:[
+    {name:'Working',   r:(s,fr)=>k2('working',s.working,fr,{zero:s.working===0,badge:String(s.working)})},
+    {name:'Approval',  r:(s,fr)=>k2('approval',s.approval,fr,{zero:s.approval===0,blink:true,badge:String(s.approval)}), blink:true},
+    {name:'Question',  r:(s,fr)=>k2('input',s.input,fr,{zero:s.input===0,blink:true,badge:String(s.input)}), blink:true},
+    {name:'Plan',      r:(s,fr)=>k2('plan',s.plan,fr,{zero:s.plan===0,blink:true,badge:String(s.plan)}), blink:true},
+    {name:'Failed',    r:(s,fr)=>k2('failed',s.failed,fr,{zero:s.failed===0,badge:String(s.failed)})},
+    {name:'Background',r:(s,fr)=>k2('background',s.background,fr,{zero:s.background===0,badge:String(s.background)})},
+  ],
+  conn:conn2,
+  dropin:'pictogram 94 units centred at (72,74) with the pill top-right; bubble 100 units wide at (66,60) with count font-size 76 / 62 or a 44-unit subtype glyph, and the pill bottom-right (clear of the tail); pills are 42 tall with font-size 30 and a 5-unit key-coloured outline.'
+},
+{
+  id:'flood', name:'3 · Flood', tag:'full-key traffic light',
+  rationale:'The whole key is the lamp. The background is the status colour and the numeral and shape are ink, so from across the room you see a yellow square before you see anything on it. Idle single-purpose keys go dark with a ghost shape, so a four-key row behaves like a traffic light where only the lit lamps matter. The combined key floods with the most urgent state\'s colour and shows that state\'s count; in the calm state it shows working with the open total beside it.',
+  keyset:['<b>Working</b> green','<b>Needs you</b> yellow','<b>Failed</b> red','<b>Usage limit</b> violet','Why four: the row <em>is</em> a traffic light; more lamps would dilute it. Background is deliberately left out because it is never urgent and would keep a lamp lit all day.'],
+  legend:'flood colour = state; ink shape top-left: ▶ working, bubble needs you, ✕ failed, hourglass limit, ring idle. Connection states flood too but use their own shapes (power, link, lock, struck T3, ⚠).',
+  blink:'Needs-you inverts: yellow key with ink numeral ↔ ink key with yellow numeral. Large luminance swing, very hard to miss.',
+  pros:['Strongest peripheral signal of all five; a lit key is visible without looking at the deck.','Ink on colour gives the highest contrast available.','Unlit idle keys remove noise; the deck is dark until something matters.','Colour plus shape plus lit/unlit gives three redundant channels.'],
+  cons:['Loud next to other plugins\' keys; a permanently green key can be fatiguing.','Working-vs-open depends on a 26-unit "/7", which is secondary at best.','Red flood is used for both failed threads and the generic error state; only the shape (✕ vs ⚠) and word tell them apart.','Unsupported-version floods white, which is bright on a dark deck (that is also the point).'],
+  combined:(sc,fr)=>{ if(sc.conn) return conn3(sc.conn); const s=sc.s, {st,n}=pick(s);
+    if(st==='working'||st==='open'||st==='none') return k3(st,n,fr,{total:s.total});
+    return k3(st,n,fr,{blink:st==='needs'}); },
+  singles:[
+    {name:'Working',    r:(s,fr)=>k3('working',s.working,fr,{zero:s.working===0,total:s.total})},
+    {name:'Needs you',  r:(s,fr)=>k3('needs',needsOf(s),fr,{zero:needsOf(s)===0,blink:true}), blink:true},
+    {name:'Failed',     r:(s,fr)=>k3('failed',s.failed,fr,{zero:s.failed===0})},
+    {name:'Usage limit',r:(s,fr)=>k3('limit',s.limit,fr,{zero:s.limit===0})},
+  ],
+  conn:conn3,
+  dropin:'background rect fill = state colour; shape 28 units at (28,28) in ink; numeral font-size 108 / 90 centred at (76,80), or 100 / 84 at (78,72) with "/total" font-size 36 bottom-right when the total is shown.'
+},
+{
+  id:'gauge', name:'4 · Gauge', tag:'segmented thread ring',
+  rationale:'The ring is the population. Each open thread is one 14-unit-thick segment, coloured by its state (green working, yellow needs you, red failed, violet usage limit, grey idle), so the ring shows the composition of everything open at once. The centre numeral is the count that matters right now and the small shape under it says which count that is. Above 12 threads the ring switches to proportional arcs per state.',
+  keyset:['<b>Working</b> — ring: working of open; numeral: working','<b>Needs you</b> — ring: needs-you of open','<b>Failed</b> — ring: failed of open','<b>Background</b> — ring: threads with background tasks','Why these four: each key answers "how much of my open work is in this state", which is what a gauge is for. Usage limit is folded into the combined ring as violet.'],
+  legend:'ring segment colours: green working, yellow needs you, red failed, violet usage limit, grey idle, dark well = not in this key\'s subset. Centre shape: ▶ / bubble / ✕ / gear / hourglass / ring.',
+  blink:'Needs-you floods the inner disc yellow with an ink numeral, then returns to the dark centre.',
+  pros:['Only concept that shows the composition of all open threads in one key.','Proportion is readable even when the segments are not countable ("about half of my work is blocked").','Looks the most like a dashboard, and the ring animates nicely as threads finish.'],
+  cons:['Segments are about 2 mm long at real size; beyond five threads you cannot count them.','Centre numeral is capped at 58 / 48 units by the ring, the smallest primary numeral of the five.','Grey idle segments are low contrast on purpose, which makes the open total hard to judge.','At 2 cm the ring is decoration; the information carried by the numeral and shape is what people actually read.'],
+  combined:(sc,fr)=>{ if(sc.conn) return conn4(sc.conn); const s=sc.s, {st,n}=pick(s); return k4(st,n,fr,{blink:st==='needs',groups:threadGroups(s,COMBINED_COLOUR)}); },
+  singles:[
+    {name:'Working',   r:(s,fr)=>k4('working',s.working,fr,{zero:s.working===0,groups:threadGroups(s,subsetColour(['working'],C.green))})},
+    {name:'Needs you', r:(s,fr)=>k4('needs',needsOf(s),fr,{zero:needsOf(s)===0,blink:true,groups:threadGroups(s,subsetColour(['approval','input','plan'],C.yellow))}), blink:true},
+    {name:'Failed',    r:(s,fr)=>k4('failed',s.failed,fr,{zero:s.failed===0,groups:threadGroups(s,subsetColour(['failed'],C.red))})},
+    {name:'Background',r:(s,fr)=>k4('background',s.background,fr,{zero:s.background===0,groups:s.total? [{c:C.cyan,w:s.background},{c:C.well,w:s.total-s.background}].filter(g=>g.w>0) : []})},
+  ],
+  conn:conn4,
+  dropin:'ring r=60, stroke-width 14, 4° gaps, one segment per thread up to 12 then proportional; numeral font-size 80 / 66 centred at y=60; shape 24 units at (72,112); blink = circle r=51 filled yellow.'
+},
+{
+  id:'quad', name:'5 · Quad', tag:'2×2 mini grid',
+  rationale:'Four counters in one key: working (top-left), needs you (top-right), failed (bottom-left), and a fourth cell that shows the most relevant secondary state (usage limit, else background, else the open total). Empty cells go dark with a ghost shape, so in practice only one or two numbers are lit and the eye goes to them. Position carries the meaning, so once learned the key reads like a car dashboard.',
+  keyset:['Any cell can be promoted to a full key with the same drawing at 2×: <b>Working</b>, <b>Needs you</b>, <b>Failed</b>, <b>Usage limit</b> shown here','Why: the combined key and the single keys share one grammar (shape top-left, numeral centred), so users who learn one learn both.'],
+  legend:'position + colour + shape: top-left green ▶ working, top-right yellow bubble needs you, bottom-left red ✕ failed, bottom-right violet hourglass / cyan gear / grey ring (limit / background / open total).',
+  blink:'The needs-you cell inverts (yellow cell, ink numeral) at ~1 Hz; the other three cells stay still so the blink is localised.',
+  pros:['Most information per key: four counts without any priority logic hiding one behind another.','Dark empty cells keep the key calm; a lit cell is obvious by position alone, even in greyscale.','Combined and single keys share a grammar.'],
+  cons:['Cell numerals are 38 units (30 for two digits), well below the 56-unit rule; readable at 2 cm only for single digits and good eyes.','Cell shapes are 14 units, below the 22 floor; they are hints, position does the real work.','Four colours in 2 cm is a lot; the key looks busy when three cells are lit.','Needs a few seconds of learning that no other concept needs.'],
+  combined:(sc,fr)=>{ if(sc.conn) return conn5(sc.conn); return combined5(sc.s,fr); },
+  singles:[
+    {name:'Working',    r:(s,fr)=>k5('working',s.working,fr)},
+    {name:'Needs you',  r:(s,fr)=>k5('needs',needsOf(s),fr,{blink:true}), blink:true},
+    {name:'Failed',     r:(s,fr)=>k5('failed',s.failed,fr)},
+    {name:'Usage limit',r:(s,fr)=>k5('limit',s.limit,fr)},
+  ],
+  conn:conn5,
+  dropin:'cells 65×65 at (5|74, 5|74) rx 9; cell numeral font-size 52 / 42; cell shape 14 at (+13,+13). Single key: numeral 104 / 86 at (80,80), shape 34 at (28,28).'
+},
+];
+
+// ---------- page build ----------
+const LIVE = [];
+function fig(inner,label,live){
+  const id = live ? ` data-live="${LIVE.length}"` : '';
+  if(live) LIVE.push(live.map(svg));
+  return `<figure><div class="face"${id}>${svg(inner)}</div><figcaption>${esc(label)}</figcaption></figure>`;
+}
+function deck(items,x2){ return `<div class="deck${x2?' x2':''}">${items.join('')}</div>`; }
+
+function combinedItems(c){
+  const items=[];
+  for(const sc of SCEN){
+    items.push(fig(c.combined(sc,0), sc.name + (needsOf(sc.s)>0 ? ' · frame A' : '')));
+    if(needsOf(sc.s)>0) items.push(fig(c.combined(sc,1), sc.name + ' · frame B'));
+  }
+  const q = SCEN[3];
+  items.push(fig(c.combined(q,0), 'live blink (' + q.name + ')', [c.combined(q,0), c.combined(q,1)]));
+  for(const k of CONNS) items.push(fig(c.combined({conn:k},0), CONN[k].name));
+  return items;
+}
+function singleItems(c){
+  const items=[];
+  for(const sg of c.singles){
+    for(const sc of SINGLE_SCEN){
+      const n = sg.r(sc.s,0);
+      items.push(fig(n, `${sg.name} · ${sc.name}` + (sg.blink && sc.id==='busy' ? ' · A' : '')));
+      if(sg.blink && sc.id==='busy') items.push(fig(sg.r(sc.s,1), `${sg.name} · ${sc.name} · B`));
+    }
+  }
+  return items;
+}
+function connSingleItems(c){ return CONNS.map(k=>fig(c.conn(k), `${c.singles[0].name} key · ${CONN[k].name}`)); }
+
+const root = document.getElementById('concepts');
+root.innerHTML = CONCEPTS.map(c => `
+<section id="${c.id}">
+  <h2>${c.name}<small>${c.tag}</small></h2>
+  <p>${c.rationale}</p>
+  <div class="meta">
+    <div><h4>Key set</h4><ul>${c.keyset.map(k=>`<li>${k}</li>`).join('')}</ul></div>
+    <div><h4>Colour + shape legend</h4><p style="margin:0">${c.legend}</p><h4 style="margin-top:10px">Blink</h4><p style="margin:0">${c.blink}</p></div>
+    <div><h4>Pros</h4><ul>${c.pros.map(k=>`<li>${k}</li>`).join('')}</ul></div>
+    <div><h4>Cons</h4><ul>${c.cons.map(k=>`<li>${k}</li>`).join('')}</ul></div>
+  </div>
+  <p class="note">Drop-in geometry: ${c.dropin}</p>
+  <h3>Combined key · scenario strip + connection states · 2×</h3>
+  ${deck(combinedItems(c),true)}
+  <h3>Combined key · same strip at true size (≈ 2 cm)</h3>
+  ${deck(combinedItems(c),false)}
+  <h3>Single-purpose keys · 2× (busy = 4 working, 1 approval, 2 questions, 1 plan, 1 failed, 1 limit, 2 background, 13 open)</h3>
+  ${deck(singleItems(c),true)}
+  <h3>Single-purpose keys · true size</h3>
+  ${deck(singleItems(c),false)}
+  <h3>Connection states on a single-purpose key (identical on every key type) · true size</h3>
+  ${deck(connSingleItems(c),false)}
+</section>`).join('');
+
+// legend tiles
+function tile(inner){ return `<svg viewBox="0 0 144 144">${bgRect(C.key)}${inner}</svg>`; }
+document.getElementById('legend-status').innerHTML = ['working','needs','approval','input','plan','failed','background','limit','open'].map(k =>
+  `<span>${tile(glyph(ST[k].glyph,72,72,96,ST[k].c,C.key))}${ST[k].name} <span class="rule">${ST[k].shape}</span></span>`).join('');
+document.getElementById('legend-conn').innerHTML = CONNS.map(k =>
+  `<span>${tile(glyph(CONN[k].glyph,72,72,96,CONN[k].c,C.key))}${CONN[k].name}${CONN[k].word?` <span class="rule">${CONN[k].word}</span>`:''}</span>`).join('');
+
+// comparison
+const rows = [
+  ['Primary numeral height (1 / 2 digits)','76 / 63','55 in bubble; 22 in pill','79 / 66 (73 / 61 with total)','58 / 48','38 / 30 per cell; 76 / 63 on single keys'],
+  ['Legibility at 2 cm','★★★★★','★★★☆☆ (icons ★★★★★, counts ★★☆☆☆)','★★★★★','★★★☆☆','★★☆☆☆ combined, ★★★★★ singles'],
+  ['"Needs you" salience','★★★★☆ (flood blink)','★★★★☆ (big bubble)','★★★★★','★★★☆☆','★★★☆☆ (one cell)'],
+  ['Working vs open on combined key','band total, always','pill "3/7"','"/7" only in calm state','ring vs numeral, roughly','two cells (working, open total) until a secondary state takes the 4th cell'],
+  ['Colour-blind safety','shape in band + luminance','icon is the shape','shape + lit/unlit + luminance','shape in centre; ring colours only','position + shape'],
+  ['Information per key','1 count + total','1 count (+ subtype)','1 count (+ total)','1 count + composition','up to 4 counts'],
+  ['Single-key set','Working · Needs you · Failed · Limit (4)','Working · Approval · Question · Plan · Failed · Background (6)','Working · Needs you · Failed · Limit (4)','Working · Needs you · Failed · Background (4)','Working · Needs you · Failed · Limit (4)'],
+  ['Visual noise next to other plugins','low','low','high (always-lit colour)','low','medium'],
+  ['Drop-in effort','trivial','medium (bubble path, pills)','trivial','medium (arcs)','low'],
+];
+document.getElementById('compare').innerHTML = `<tr><th></th>${CONCEPTS.map(c=>`<th>${c.name}<br><small style="font-weight:normal;color:#8b949e">${c.tag}</small></th>`).join('')}</tr>` +
+  rows.map(r=>`<tr><th>${r[0]}</th>${r.slice(1).map(v=>`<td>${v}</td>`).join('')}</tr>`).join('');
+
+document.getElementById('rec').innerHTML = `
+<h3 style="margin-top:0">Recommendation</h3>
+<p><strong>Ship Concept 1 (Counter) as the default grammar for both the combined key and the single-purpose row.</strong> It has the largest numerals, it keeps working-vs-open visible in every state, the band gives colour-blind users a shape next to every colour, and its needs-you blink borrows the full flood from Concept 3, so the urgent state is as loud as the traffic light without the deck being lit all day. It is also the smallest change to <code>render.ts</code>: a rect band, one glyph, two text elements.</p>
+<p><strong>Runner-up: Concept 3 (Flood)</strong> for users whose deck is dedicated to T3 and who want the row to behave like a traffic light; it is the only one that reads from across the room. Offer it as a "loud" style toggle rather than the default.</p>
+<p><strong>Borrow from Concept 2:</strong> the three bubble subtypes (✓ ? ≡) are the best way to offer Approval / Question / Plan as separate keys if the user wants them; they drop straight into the Counter band as the band glyph.</p>
+<p><strong>Do not ship 4 or 5 as the combined key.</strong> The gauge ring and the quad cells are the two most informative designs on the 2× rows and the two least readable on the 1× rows, which is the only row that matters.</p>`;
+
+// live blink
+let phase = 0;
+setInterval(()=>{ phase ^= 1; document.querySelectorAll('[data-live]').forEach(el=>{ el.innerHTML = LIVE[+el.dataset.live][phase]; }); }, 650);
+</script>
+</body>
+</html>

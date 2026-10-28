@@ -19,19 +19,43 @@ class MemoryStore implements ConnectionStore {
 		this.values = structuredClone(values);
 	}
 }
+// A V2 OrchestrationV2ThreadShell, including fields the plugin must ignore.
 const thread = (id = "thread-1", extra = {}) => ({
 	id,
+	projectId: "project-1",
+	title: "Private thread title",
+	createdBy: "user",
+	creationSource: "web",
 	interactionMode: "default",
-	archivedAt: null,
-	settledOverride: "active",
-	settledAt: null,
-	hasPendingApprovals: false,
-	hasPendingUserInput: false,
+	lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: id },
+	latestRunId: "run-1",
+	activeRunId: "run-1",
+	activeProviderThreadId: "provider-thread-1",
+	activityRunStatus: "running",
+	status: "running",
+	pendingRuntimeRequest: null,
+	latestVisibleMessage: {
+		id: "message-1",
+		role: "assistant",
+		text: "Private text",
+		updatedAt: "2030-01-01T00:00:00.000Z",
+	},
+	latestUserMessageAt: null,
 	hasActionableProposedPlan: false,
-	latestTurn: null,
-	session: { status: "running" },
+	pendingBackgroundTasks: [],
+	itemCount: 3,
+	visibleItemCount: 2,
+	createdAt: "2030-01-01T00:00:00.000Z",
+	updatedAt: "2030-01-01T00:00:00.000Z",
+	archivedAt: null,
+	settledOverride: null,
+	settledAt: null,
+	deletedAt: null,
 	...extra,
 });
+const question = {
+	pendingRuntimeRequest: { id: "request-1", kind: "user_input", createdAt: "2030-01-01T00:00:00.000Z" },
+};
 
 async function fixture(context: TestContext) {
 	const requests: Array<{ path: string; authorization?: string; body: string }> = [];
@@ -41,6 +65,8 @@ async function fixture(context: TestContext) {
 	let environmentId = "env-1";
 	let expiresIn = 30 * 86400;
 	let grantedScope = "orchestration:read";
+	let protocolVersion: number | undefined = 2;
+	let capabilities: Record<string, unknown> = { terminal: true };
 	const server = createServer(async (request, response) => {
 		let body = "";
 		for await (const chunk of request) body += chunk;
@@ -51,7 +77,8 @@ async function fixture(context: TestContext) {
 				JSON.stringify({
 					environmentId,
 					label: "Test environment",
-					capabilities: { terminal: true },
+					orchestrationProtocolVersion: protocolVersion,
+					capabilities,
 				}),
 			);
 		else if (rejected) {
@@ -86,10 +113,9 @@ async function fixture(context: TestContext) {
 			]);
 	};
 	ws.on("connection", (socket, request) => {
-		assert.equal(
-			new URL(request.url ?? "", "http://localhost").searchParams.get("wsTicket"),
-			"fixture-ticket",
-		);
+		const url = new URL(request.url ?? "", "http://localhost");
+		assert.equal(url.searchParams.get("wsTicket"), "fixture-ticket");
+		assert.equal(url.searchParams.get("orchestrationProtocol"), "2");
 		assert.equal(request.headers.authorization, undefined);
 		sockets.push(socket);
 		socket.on("message", (data) => {
@@ -131,6 +157,12 @@ async function fixture(context: TestContext) {
 		setScope: (value: string) => {
 			grantedScope = value;
 		},
+		setProtocolVersion: (value: number | undefined) => {
+			protocolVersion = value;
+		},
+		setCapabilities: (value: Record<string, unknown>) => {
+			capabilities = value;
+		},
 		onSubscribe: (callback: typeof onSubscribe) => {
 			onSubscribe = callback;
 		},
@@ -159,7 +191,10 @@ async function until(client: T3LiveClient, predicate: () => Promise<boolean>) {
 	});
 }
 async function connected(client: T3LiveClient) {
-	await until(client, async () => (await client.getConnectionStatus()).state === "connected");
+	await until(client, async () => {
+		const status = await client.getConnectionStatus();
+		return "connections" in status && status.connections.every((env) => env.state === "connected");
+	});
 }
 
 test("pairing exchanges only read scope, streams input changes and removals without polling", async (context) => {
@@ -181,11 +216,70 @@ test("pairing exchanges only read scope, streams input changes and removals with
 	await Promise.all(Array.from({ length: 20 }, () => client.getSnapshot()));
 	assert.equal(server.requests.length, count);
 	send(firstSocket(server.sockets), [
-		{ kind: "thread-upserted", sequence: 12, thread: thread("thread-1", { hasPendingUserInput: true }) },
+		{ kind: "thread.updated", sequence: 12, location: "active", thread: thread("thread-1", question) },
 	]);
 	await until(client, async () => (await client.getSnapshot()).summary.input === 1);
-	send(firstSocket(server.sockets), [{ kind: "thread-removed", sequence: 13, threadId: "thread-1" }]);
+	send(firstSocket(server.sockets), [
+		{ kind: "thread.removed", sequence: 13, location: "active", threadId: "thread-1" },
+	]);
 	await until(client, async () => (await client.getSnapshot()).summary.total === 0);
+});
+
+test("metadata refreshes, archive moves, and unknown items keep the active thread set", async (context) => {
+	const server = await fixture(context);
+	const client = new T3LiveClient({ store: new MemoryStore(), retryMs: 10 });
+	context.after(() => client.dispose());
+	await client.pair(server.link);
+	await connected(client);
+	send(firstSocket(server.sockets), [
+		{ kind: "synchronized" },
+		{
+			kind: "snapshot",
+			snapshot: { schemaVersion: 1, snapshotSequence: 10, projects: [], threads: [], archivedThreads: [] },
+			resolvedRepositoryIdentityRoots: ["/repo"],
+		},
+		{ kind: "project.updated", sequence: 11, project: { id: "project-1" } },
+		{ kind: "future.kind", sequence: 12 },
+		{ kind: "thread.updated", sequence: 13, location: "active", thread: thread("thread-2") },
+		{ kind: "thread.removed", sequence: 14, location: "archive", threadId: "thread-2" },
+	]);
+	await until(client, async () => (await client.getSnapshot()).summary.total === 2);
+	send(firstSocket(server.sockets), [
+		{
+			kind: "thread.updated",
+			sequence: 15,
+			location: "archive",
+			thread: thread("thread-2", { archivedAt: "2030-01-01T00:00:00.000Z" }),
+		},
+	]);
+	await until(client, async () => (await client.getSnapshot()).summary.total === 1);
+	assert.equal((await client.getConnectionStatus()).state, "connected");
+});
+
+test("unsupported orchestration protocols are rejected before credentials are exchanged", async (context) => {
+	const server = await fixture(context);
+	const client = new T3LiveClient({ store: new MemoryStore(), retryMs: 10 });
+	context.after(() => client.dispose());
+	server.setProtocolVersion(undefined);
+	await assert.rejects(client.pair(server.link), { code: "unsupported-version" });
+	assert.equal(server.requests.filter((item) => item.path === "/oauth/token").length, 0);
+	server.setProtocolVersion(2);
+	await client.pair(server.link);
+	await connected(client);
+	server.setProtocolVersion(3);
+	firstSocket(server.sockets).terminate();
+	await until(client, async () => (await client.getConnectionStatus()).state === "offline");
+	await assert.rejects(client.getSnapshot(), { code: "unsupported-version" });
+});
+
+test("requests trimmed subagent snapshots only from servers that advertise them", async (context) => {
+	const server = await fixture(context);
+	const client = new T3LiveClient({ store: new MemoryStore(), retryMs: 10 });
+	context.after(() => client.dispose());
+	server.setCapabilities({ shellThreadFamilies: true });
+	await client.pair(server.link);
+	await connected(client);
+	assert.deepEqual(server.subscriptions[0], { omitIdleSubagents: true });
 });
 
 test("reconnect requests a fresh ticket and snapshot before accepting live updates", async (context) => {
@@ -195,7 +289,7 @@ test("reconnect requests a fresh ticket and snapshot before accepting live updat
 	await client.pair(server.link);
 	await connected(client);
 	send(firstSocket(server.sockets), [
-		{ kind: "thread-upserted", sequence: 19, thread: thread("thread-1", { hasPendingUserInput: true }) },
+		{ kind: "thread.updated", sequence: 19, location: "active", thread: thread("thread-1", question) },
 	]);
 	await until(client, async () => (await client.getSnapshot()).summary.input === 1);
 	server.onSubscribe((socket, payload) => {
@@ -209,8 +303,8 @@ test("reconnect requests a fresh ticket and snapshot before accepting live updat
 					updatedAt: new Date().toISOString(),
 				},
 			},
-			{ kind: "thread-upserted", sequence: 21, thread: thread("ignored-duplicate") },
-			{ kind: "thread-upserted", sequence: 22, thread: thread("thread-3") },
+			{ kind: "thread.updated", sequence: 21, location: "active", thread: thread("ignored-duplicate") },
+			{ kind: "thread.updated", sequence: 22, location: "active", thread: thread("thread-3") },
 		]);
 	});
 	firstSocket(server.sockets).terminate();
@@ -237,7 +331,7 @@ test("expired sessions stop automatic retries; re-pair replaces credentials with
 	// T3 authorizes at upgrade: an uninterrupted stream can outlive its bearer credential.
 	assert.equal((await client.getConnectionStatus()).state, "connected");
 	send(firstSocket(server.sockets), [
-		{ kind: "thread-upserted", sequence: 12, thread: thread("thread-1", { hasPendingUserInput: true }) },
+		{ kind: "thread.updated", sequence: 12, location: "active", thread: thread("thread-1", question) },
 	]);
 	await until(client, async () => (await client.getSnapshot()).summary.input === 1);
 	firstSocket(server.sockets).terminate();
@@ -369,7 +463,7 @@ function firstSocket(sockets: WebSocket[]): WebSocket {
 	return socket;
 }
 
-test("multiple environments aggregate independently and offline environments never produce partial live totals", async (context) => {
+test("multiple environments aggregate independently and unreachable environments are left out of the totals", async (context) => {
 	const a = await fixture(context);
 	const b = await fixture(context);
 	b.setIdentity("env-2");
@@ -383,8 +477,18 @@ test("multiple environments aggregate independently and offline environments nev
 	assert.equal((await client.getSnapshot()).summary.total, 2);
 	assert.equal(a.subscriptions.length, 1);
 	assert.equal(b.subscriptions.length, 1);
-	b.setRejected(true);
+	// A machine that stops answering drops out of the counts; the others keep showing.
+	b.setProtocolVersion(3);
 	firstSocket(b.sockets).terminate();
+	await until(client, async () => {
+		const status = await client.getConnectionStatus();
+		return "connections" in status && status.connections.some((env) => env.state === "offline");
+	});
+	assert.equal((await client.getConnectionStatus()).state, "connected");
+	assert.equal((await client.getSnapshot()).summary.total, 1);
+	// An expired authorization still asks for re-pairing, because only the user can fix it.
+	b.setProtocolVersion(2);
+	b.setRejected(true);
 	await until(client, async () => (await client.getConnectionStatus()).state === "authorization-required");
 	await assert.rejects(client.getSnapshot(), { code: "authorization-required" });
 	await client.remove("env-2");
@@ -408,7 +512,9 @@ test("malformed stream data drops stale state and reconnects with a complete sna
 			},
 		]);
 	});
-	send(firstSocket(server.sockets), [{ kind: "thread-upserted", sequence: 12, thread: { id: "bad" } }]);
+	send(firstSocket(server.sockets), [
+		{ kind: "thread.updated", sequence: 12, location: "active", thread: { id: "bad" } },
+	]);
 	await until(
 		client,
 		async () =>

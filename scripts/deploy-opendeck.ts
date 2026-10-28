@@ -159,7 +159,8 @@ export async function findOpenDeckProcesses(): Promise<OpenDeckProcess[]> {
 			const processRoot = resolve("/proc", entry.name);
 			if ((await readFile(resolve(processRoot, "comm"), "utf8")).trim() !== "opendeck") continue;
 			processes.push({
-				executable: await readlink(resolve(processRoot, "exe")),
+				// After a package upgrade the running binary is marked deleted; its replacement accepts reloads.
+				executable: (await readlink(resolve(processRoot, "exe"))).replace(/ \(deleted\)$/, ""),
 				pid: Number(entry.name),
 			});
 		} catch {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
 import { classifyThread, emptySummary, isRelevantThread, summarizeSnapshot } from "../src/status.js";
+import { parseThread } from "../src/t3-protocol.js";
 import {
 	DEFAULT_REFRESH_SECONDS,
 	MAX_REFRESH_SECONDS,
@@ -11,420 +12,396 @@ import {
 	type T3ThreadShell,
 } from "../src/types.js";
 
+const NOW = Date.parse("2030-01-01T12:00:00.000Z");
+
 function thread(overrides: Partial<T3ThreadShell> = {}): T3ThreadShell {
 	return {
 		id: "thread-1",
+		parentThreadId: null,
+		relationshipToParent: null,
+		creationSource: "web",
 		interactionMode: "default",
+		status: "idle",
+		activityRunStatus: null,
+		latestRunId: "run-1",
+		latestRunCompletedAt: null,
+		activeProviderThreadId: null,
+		pendingRuntimeRequest: null,
+		pendingGuestMessageCount: 0,
+		hasActionableProposedPlan: false,
+		pendingBackgroundTasks: [],
+		limitRecovery: false,
+		updatedAt: "2030-01-01T11:00:00.000Z",
 		archivedAt: null,
-		createdAt: "2029-12-01T12:00:00.000Z",
+		deletedAt: null,
 		settledOverride: null,
-		settledAt: null,
-		latestUserMessageAt: null,
 		snoozedAt: null,
 		snoozedUntil: null,
-		hasPendingApprovals: false,
-		hasPendingUserInput: false,
-		hasActionableProposedPlan: false,
-		backgroundLiveness: null,
-		latestTurn: null,
-		session: null,
 		...overrides,
 	};
+}
+
+function running(overrides: Partial<T3ThreadShell> = {}): T3ThreadShell {
+	return thread({ status: "running", activityRunStatus: "running", ...overrides });
+}
+
+function snapshot(threads: T3ThreadShell[]): T3ShellSnapshot {
+	return { snapshotSequence: 1, threads, updatedAt: "2030-01-01T12:00:00.000Z" };
 }
 
 describe("classifyThread", () => {
 	const cases: Array<{ name: string; source: Partial<T3ThreadShell>; expected: string }> = [
 		{
-			name: "approval wins over every lower-priority signal",
-			source: {
-				hasPendingApprovals: true,
-				hasPendingUserInput: true,
-				session: { status: "running" },
-			},
+			name: "a provider approval wins over a running run",
+			source: { status: "running", activityRunStatus: "running", pendingRuntimeRequest: { kind: "command" } },
 			expected: "approval",
 		},
 		{
-			name: "user input wins over a failed session",
-			source: { hasPendingUserInput: true, session: { status: "error" } },
+			name: "a blocking question needs input",
+			source: {
+				status: "running",
+				activityRunStatus: "running",
+				pendingRuntimeRequest: { kind: "user_input" },
+			},
 			expected: "input",
 		},
 		{
-			name: "session errors are failures",
-			source: { backgroundLiveness: "working", session: { status: "error" } },
-			expected: "failed",
-		},
-		{
-			name: "a session error wins over a stale running turn",
-			source: { session: { status: "error" }, latestTurn: { state: "running" } },
-			expected: "failed",
-		},
-		{
-			name: "a running session wins over a stale turn error",
-			source: { session: { status: "running" }, latestTurn: { state: "error" } },
+			name: "a non-blocking question does not interrupt a working run",
+			source: {
+				status: "running",
+				activityRunStatus: "running",
+				pendingRuntimeRequest: { kind: "user_input", blocking: false },
+			},
 			expected: "working",
 		},
 		{
-			name: "a stale turn error does not override a resting session",
-			source: { session: { status: "stopped" }, latestTurn: { state: "error" } },
+			name: "a non-blocking question needs input once the run stops",
+			source: { status: "completed", pendingRuntimeRequest: { kind: "user_input", blocking: false } },
+			expected: "input",
+		},
+		{
+			name: "an auth refresh is neither approval nor input",
+			source: { status: "completed", pendingRuntimeRequest: { kind: "auth_refresh" } },
 			expected: "waiting",
 		},
 		{
-			name: "a starting session is active",
-			source: { session: { status: "starting" } },
+			name: "guest messages wait for the owner",
+			source: { pendingGuestMessageCount: 2 },
+			expected: "input",
+		},
+		{
+			name: "an actionable plan needs review once the run ends",
+			source: { status: "completed", interactionMode: "plan", hasActionableProposedPlan: true },
+			expected: "plan",
+		},
+		{
+			name: "a plan still being written is working",
+			source: {
+				status: "running",
+				activityRunStatus: "running",
+				interactionMode: "plan",
+				hasActionableProposedPlan: true,
+			},
+			expected: "working",
+		},
+		{
+			name: "a plan run that waits on a subagent is still working",
+			source: {
+				status: "running",
+				activityRunStatus: "running",
+				interactionMode: "plan",
+				hasActionableProposedPlan: true,
+				pendingBackgroundTasks: [{ kind: "subagent", awaited: false }],
+			},
+			expected: "working",
+		},
+		{
+			name: "a usage limit waits for its reset",
+			source: { status: "failed", limitRecovery: true },
+			expected: "limited",
+		},
+		{ name: "a failed run", source: { status: "failed" }, expected: "failed" },
+		{
+			name: "a preparing run is starting",
+			source: { status: "preparing", activityRunStatus: "preparing" },
 			expected: "starting",
 		},
+		{ name: "a queued run is starting", source: { status: "queued" }, expected: "starting" },
 		{
-			name: "a running session is working",
-			source: { session: { status: "running" } },
+			name: "a draining run still works",
+			source: { status: "waiting", activityRunStatus: "waiting" },
 			expected: "working",
 		},
 		{
-			name: "a stale running turn does not override a resting session",
-			source: { session: { status: "stopped" }, latestTurn: { state: "running" } },
-			expected: "waiting",
-		},
-		{
-			name: "background work is working",
-			source: { backgroundLiveness: "working" },
+			name: "the activity run wins over a completed latest run",
+			source: { status: "completed", activityRunStatus: "running" },
 			expected: "working",
 		},
 		{
-			name: "background monitoring stays active",
-			source: { backgroundLiveness: "monitoring" },
+			name: "older servers without activityRunStatus use the run status",
+			source: { status: "running", activityRunStatus: undefined },
+			expected: "working",
+		},
+		{
+			name: "awaited background work holds the thread working",
+			source: { status: "completed", pendingBackgroundTasks: [{ kind: "subagent", awaited: false }] },
+			expected: "working",
+		},
+		{
+			name: "an awaited command holds the thread working",
+			source: { status: "completed", pendingBackgroundTasks: [{ kind: "command", awaited: true }] },
+			expected: "working",
+		},
+		{
+			name: "an unawaited dev server is only monitoring",
+			source: { status: "completed", pendingBackgroundTasks: [{ kind: "command", awaited: false }] },
 			expected: "monitoring",
 		},
+		{ name: "a completed run waits", source: { status: "completed" }, expected: "waiting" },
 		{
-			name: "a completed actionable turn in plan mode needs attention when otherwise ready",
-			source: {
-				interactionMode: "plan",
-				hasActionableProposedPlan: true,
-				latestTurn: {
-					state: "completed",
-					startedAt: "2030-01-01T11:59:00.000Z",
-					completedAt: "2030-01-01T12:00:00.000Z",
-				},
-			},
-			expected: "plan",
-		},
-		...(["working", "monitoring"] as const).map((backgroundLiveness) => ({
-			name: `an actionable settled plan outranks background ${backgroundLiveness}`,
-			source: {
-				interactionMode: "plan" as const,
-				hasActionableProposedPlan: true,
-				backgroundLiveness,
-				latestTurn: {
-					state: "completed" as const,
-					startedAt: "2030-01-01T11:59:00.000Z",
-					completedAt: "2030-01-01T12:00:00.000Z",
-				},
-			},
-			expected: "plan",
-		})),
-		{
-			name: "a proposed plan is not actionable in default interaction mode",
-			source: {
-				hasActionableProposedPlan: true,
-				latestTurn: {
-					state: "completed",
-					startedAt: "2030-01-01T11:59:00.000Z",
-					completedAt: "2030-01-01T12:00:00.000Z",
-				},
-			},
+			name: "a thread that never ran waits",
+			source: { status: "idle", latestRunId: null },
 			expected: "waiting",
 		},
-		{
-			name: "an unfinished plan turn does not ask for attention yet",
-			source: {
-				interactionMode: "plan",
-				hasActionableProposedPlan: true,
-				latestTurn: { state: "running", startedAt: "2030-01-01T11:59:00.000Z" },
-			},
-			expected: "waiting",
-		},
-		{ name: "a thread without signals is waiting", source: {}, expected: "waiting" },
 	];
 
-	for (const testCase of cases) {
-		test(testCase.name, () => {
-			assert.equal(classifyThread(thread(testCase.source)), testCase.expected);
+	for (const { name, source, expected } of cases) {
+		test(name, () => {
+			assert.equal(classifyThread(thread(source)), expected);
 		});
 	}
+
+	test("a live subagent approval flags its parent", () => {
+		assert.equal(classifyThread(thread(), true), "approval");
+	});
 });
 
 describe("isRelevantThread", () => {
-	const now = Date.parse("2030-01-01T12:00:00.000Z");
-
 	test("keeps an open waiting thread", () => {
-		assert.equal(isRelevantThread(thread(), now), true);
+		assert.equal(isRelevantThread(thread(), NOW), true);
 	});
 
-	test("drops archived threads even while their session says running", () => {
+	test("drops archived, deleted, and subagent threads", () => {
+		assert.equal(isRelevantThread(running({ archivedAt: "2029-12-01T00:00:00.000Z" }), NOW), false);
+		assert.equal(isRelevantThread(running({ deletedAt: "2029-12-01T00:00:00.000Z" }), NOW), false);
 		assert.equal(
-			isRelevantThread(
-				thread({ archivedAt: "2029-12-31T12:00:00.000Z", session: { status: "running" } }),
-				now,
-			),
+			isRelevantThread(running({ relationshipToParent: "subagent", parentThreadId: "p" }), NOW),
 			false,
 		);
+		assert.equal(isRelevantThread(thread({ relationshipToParent: "fork", parentThreadId: "p" }), NOW), true);
 	});
 
-	test("drops an explicitly settled thread but does not infer settlement from settledAt alone", () => {
-		assert.equal(isRelevantThread(thread({ settledOverride: "settled" }), now), false);
-		assert.equal(isRelevantThread(thread({ settledAt: "2029-12-31T12:00:00.000Z" }), now), true);
-	});
-
-	test("keeps explicitly settled threads while their session is genuinely running", () => {
-		assert.equal(
-			isRelevantThread(thread({ settledOverride: "settled", session: { status: "running" } }), now),
-			true,
-		);
-	});
-
-	test("drops explicitly settled threads when only a stale turn says running", () => {
+	test("drops settled threads unless they work or ask", () => {
+		assert.equal(isRelevantThread(thread({ settledOverride: "settled", status: "completed" }), NOW), false);
+		assert.equal(isRelevantThread(thread({ settledOverride: "settled", status: "failed" }), NOW), false);
+		assert.equal(isRelevantThread(running({ settledOverride: "settled" }), NOW), true);
 		assert.equal(
 			isRelevantThread(
-				thread({
+				running({
 					settledOverride: "settled",
-					session: { status: "stopped" },
-					latestTurn: { state: "running" },
+					pendingBackgroundTasks: [{ kind: "subagent", awaited: false }],
 				}),
-				now,
+				NOW,
+			),
+			true,
+		);
+		assert.equal(
+			isRelevantThread(
+				thread({ settledOverride: "settled", pendingRuntimeRequest: { kind: "command" } }),
+				NOW,
+			),
+			true,
+		);
+		assert.equal(isRelevantThread(thread({ settledOverride: "settled" }), NOW, true), true);
+		assert.equal(
+			isRelevantThread(thread({ settledOverride: "settled", pendingGuestMessageCount: 1 }), NOW),
+			true,
+		);
+		assert.equal(isRelevantThread(thread({ settledOverride: "active" }), NOW), true);
+	});
+
+	test("drops a snoozed thread until its wake time", () => {
+		assert.equal(isRelevantThread(thread({ snoozedUntil: "2030-01-02T00:00:00.000Z" }), NOW), false);
+		assert.equal(isRelevantThread(thread({ snoozedUntil: "2030-01-01T11:00:00.000Z" }), NOW), true);
+		assert.equal(isRelevantThread(thread({ snoozedUntil: "not a date" }), NOW), true);
+	});
+
+	test("a snoozed thread stays hidden while it works or completes", () => {
+		const snoozed = { snoozedAt: "2030-01-01T10:00:00.000Z", snoozedUntil: "2030-01-02T00:00:00.000Z" };
+		assert.equal(isRelevantThread(running(snoozed), NOW), false);
+		assert.equal(
+			isRelevantThread(
+				thread({ ...snoozed, status: "completed", latestRunCompletedAt: "2030-01-01T11:00:00.000Z" }),
+				NOW,
 			),
 			false,
 		);
 	});
 
-	test("an explicit active override suppresses automatic inactivity settlement", () => {
+	test("requests, guest messages, and fresh failures raise a snoozed thread's hand", () => {
+		const snoozed = { snoozedAt: "2030-01-01T10:00:00.000Z", snoozedUntil: "2030-01-02T00:00:00.000Z" };
+		assert.equal(
+			isRelevantThread(thread({ ...snoozed, pendingRuntimeRequest: { kind: "user_input" } }), NOW),
+			true,
+		);
 		assert.equal(
 			isRelevantThread(
-				thread({
-					settledOverride: "active",
-					latestUserMessageAt: "2029-12-20T12:00:00.000Z",
-				}),
-				now,
+				thread({ ...snoozed, pendingRuntimeRequest: { kind: "user_input", blocking: false } }),
+				NOW,
 			),
 			true,
 		);
-	});
-
-	test("drops a sleeping waiting thread until its wake time", () => {
-		assert.equal(isRelevantThread(thread({ snoozedUntil: "2030-01-01T12:00:01.000Z" }), now), false);
-		assert.equal(isRelevantThread(thread({ snoozedUntil: "2030-01-01T11:59:59.000Z" }), now), true);
-	});
-
-	test("a running session stays snoozed, while pending user action raises its hand", () => {
+		assert.equal(isRelevantThread(thread({ ...snoozed, pendingGuestMessageCount: 1 }), NOW), true);
+		assert.equal(isRelevantThread(thread(snoozed), NOW, true), true);
 		assert.equal(
 			isRelevantThread(
-				thread({ snoozedUntil: "2030-01-02T12:00:00.000Z", session: { status: "running" } }),
-				now,
+				thread({ ...snoozed, status: "failed", latestRunCompletedAt: "2030-01-01T11:00:00.000Z" }),
+				NOW,
 			),
-			false,
-		);
-		assert.equal(
-			isRelevantThread(thread({ snoozedUntil: "2030-01-02T12:00:00.000Z", hasPendingApprovals: true }), now),
 			true,
 		);
-	});
-
-	test("treats an invalid wake timestamp as open", () => {
-		assert.equal(isRelevantThread(thread({ snoozedUntil: "not-a-date" }), now), true);
-	});
-
-	test("only a fresh failure or a completion after the snooze raises its hand", () => {
-		const snoozedAt = "2030-01-01T10:00:00.000Z";
-		const snoozedUntil = "2030-01-02T12:00:00.000Z";
 		assert.equal(
 			isRelevantThread(
-				thread({
-					snoozedAt,
-					snoozedUntil,
-					session: { status: "error", updatedAt: "2030-01-01T09:59:00.000Z" },
-				}),
-				now,
+				thread({ ...snoozed, status: "failed", latestRunCompletedAt: "2030-01-01T09:00:00.000Z" }),
+				NOW,
 			),
 			false,
 		);
-		assert.equal(
-			isRelevantThread(
-				thread({
-					snoozedAt,
-					snoozedUntil,
-					session: { status: "error", updatedAt: "2030-01-01T10:01:00.000Z" },
-				}),
-				now,
-			),
-			true,
-		);
-		assert.equal(
-			isRelevantThread(
-				thread({
-					snoozedAt,
-					snoozedUntil,
-					latestTurn: {
-						state: "completed",
-						completedAt: "2030-01-01T10:01:00.000Z",
-					},
-				}),
-				now,
-			),
-			true,
-		);
+		assert.equal(isRelevantThread(thread({ ...snoozed, snoozedAt: null, status: "failed" }), NOW), true);
 	});
+});
 
-	test("auto-settles only beyond the default three-day inactivity window", () => {
-		assert.equal(isRelevantThread(thread({ latestUserMessageAt: "2029-12-29T11:59:59.999Z" }), now), false);
-		assert.equal(isRelevantThread(thread({ latestUserMessageAt: "2029-12-29T12:00:00.000Z" }), now), true);
-		assert.equal(
-			isRelevantThread(thread({ latestUserMessageAt: "2029-12-29T11:59:59.999Z" }), now, null),
-			true,
-		);
-		assert.equal(
-			isRelevantThread(thread({ latestUserMessageAt: "2029-12-31T11:59:59.999Z" }), now, 1),
-			false,
-		);
-	});
-
-	test("uses the latest valid user or turn timestamp for inactivity", () => {
-		assert.equal(
-			isRelevantThread(
+describe("summarizeSnapshot", () => {
+	test("counts open top-level threads and their working share", () => {
+		const summary = summarizeSnapshot(
+			snapshot([
+				thread({ id: "starting", status: "starting", activityRunStatus: "starting" }),
+				running({ id: "work-1" }),
+				running({ id: "work-2" }),
 				thread({
-					latestUserMessageAt: "2029-12-20T12:00:00.000Z",
-					latestTurn: {
-						state: "completed",
-						requestedAt: "2029-12-20T12:00:00.000Z",
-						startedAt: "2029-12-31T11:00:00.000Z",
-						completedAt: "2029-12-31T12:00:00.000Z",
-					},
+					id: "held",
+					status: "completed",
+					pendingBackgroundTasks: [{ kind: "background_task", awaited: false }],
 				}),
-				now,
-			),
-			true,
-		);
-		assert.equal(
-			isRelevantThread(
 				thread({
-					createdAt: "2029-12-01T12:00:00.000Z",
-					latestUserMessageAt: null,
-					latestTurn: null,
+					id: "dev-server",
+					status: "completed",
+					pendingBackgroundTasks: [{ kind: "monitor", awaited: false }],
 				}),
-				now,
-			),
-			true,
+				thread({ id: "idle", status: "completed" }),
+				running({ id: "archived", archivedAt: "2029-12-01T00:00:00.000Z" }),
+				thread({ id: "settled", status: "completed", settledOverride: "settled" }),
+				thread({ id: "sleeping", snoozedUntil: "2030-01-02T12:00:00.000Z" }),
+				running({ id: "child", relationshipToParent: "subagent", parentThreadId: "work-1" }),
+			]),
+			NOW,
 		);
-	});
-
-	test("pending work and live sessions block every settlement path", () => {
-		for (const source of [
-			{ hasPendingApprovals: true },
-			{ hasPendingUserInput: true },
-			{ session: { status: "starting" } },
-			{ session: { status: "running" } },
-		] satisfies Array<Partial<T3ThreadShell>>) {
-			assert.equal(
-				isRelevantThread(
-					thread({
-						...source,
-						settledOverride: "settled",
-						latestUserMessageAt: "2029-12-20T12:00:00.000Z",
-					}),
-					now,
-				),
-				true,
-			);
-		}
-	});
-
-	test("a newly queued turn blocks settlement until adoption or the two-minute grace expires", () => {
-		const messageAt = "2030-01-01T11:59:00.000Z";
-		const queued = thread({
-			settledOverride: "settled",
-			settledAt: "2030-01-01T11:58:00.000Z",
-			latestUserMessageAt: messageAt,
+		assert.deepEqual(summary, {
+			...emptySummary(),
+			total: 6,
+			running: 4,
+			attention: 2,
+			starting: 1,
+			working: 3,
+			monitoring: 1,
+			waiting: 1,
+			background: 2,
+			// The thread held open by its awaited background task only waits.
+			blocked: 1,
 		});
-		assert.equal(isRelevantThread(queued, now), true);
-		assert.equal(
-			isRelevantThread(
-				thread({
-					...queued,
-					latestTurn: { state: "running", requestedAt: messageAt },
-				}),
-				now,
-			),
-			false,
-		);
-		assert.equal(
-			isRelevantThread(
-				thread({
-					...queued,
-					settledAt: "2030-01-01T12:00:00.000Z",
-				}),
-				now,
-			),
-			false,
-		);
-		assert.equal(
-			isRelevantThread(
-				thread({
-					...queued,
-					latestUserMessageAt: "2030-01-01T11:57:59.999Z",
-				}),
-				now,
-			),
-			false,
-		);
 	});
-});
 
-test("summarizeSnapshot reports six of seven visible parent threads as working", () => {
-	const now = Date.parse("2030-01-01T12:00:00.000Z");
-	const states: T3ThreadShell[] = [
-		thread({ id: "starting", session: { status: "starting" } }),
-		thread({ id: "session-work-1", session: { status: "running" } }),
-		thread({ id: "session-work-2", session: { status: "running" } }),
-		thread({ id: "background-work-1", backgroundLiveness: "working" }),
-		thread({ id: "background-work-2", backgroundLiveness: "working" }),
-		thread({ id: "background-work-3", backgroundLiveness: "working" }),
-		thread({ id: "waiting" }),
-		thread({ id: "archived", archivedAt: "2029-12-01T00:00:00.000Z", session: { status: "running" } }),
-		thread({ id: "settled", settledOverride: "settled" }),
-		thread({ id: "sleeping", snoozedUntil: "2030-01-02T12:00:00.000Z" }),
-		thread({ id: "stale", latestUserMessageAt: "2029-12-20T12:00:00.000Z" }),
-	];
-	const snapshot: T3ShellSnapshot = {
-		snapshotSequence: 42,
-		threads: states,
-		updatedAt: "2030-01-01T12:00:00.000Z",
-	};
-
-	assert.deepEqual(summarizeSnapshot(snapshot, now), {
-		total: 7,
-		running: 6,
-		attention: 1,
-		approval: 0,
-		input: 0,
-		failed: 0,
-		starting: 1,
-		working: 5,
-		monitoring: 0,
-		plan: 0,
-		waiting: 1,
+	test("splits waiting runs out of running and counts finished threads the user has not opened", () => {
+		const summary = summarizeSnapshot(
+			snapshot([
+				running({ id: "busy" }),
+				running({ id: "on-subagent", blockedOnThreadWait: true }),
+				thread({
+					id: "unseen",
+					status: "completed",
+					latestRunCompletedAt: "2030-01-01T11:30:00.000Z",
+					lastVisitedAt: "2030-01-01T11:00:00.000Z",
+				}),
+				thread({
+					id: "seen",
+					status: "completed",
+					latestRunCompletedAt: "2030-01-01T11:00:00.000Z",
+					lastVisitedAt: "2030-01-01T11:30:00.000Z",
+				}),
+				thread({
+					id: "never-visited",
+					status: "completed",
+					latestRunCompletedAt: "2030-01-01T11:30:00.000Z",
+				}),
+				thread({
+					id: "failed-unseen",
+					status: "failed",
+					latestRunCompletedAt: "2030-01-01T11:30:00.000Z",
+					lastVisitedAt: "2030-01-01T11:00:00.000Z",
+				}),
+			]),
+			NOW,
+		);
+		assert.equal(summary.running, 2);
+		assert.equal(summary.blocked, 1);
+		// Failures count as errors, not as unseen.
+		assert.equal(summary.unseen, 1);
+		assert.equal(summary.total, 6);
 	});
-});
 
-test("monitoring remains visible but does not count as working", () => {
-	const now = Date.parse("2030-01-01T12:00:00.000Z");
-	const snapshot: T3ShellSnapshot = {
-		snapshotSequence: 43,
-		threads: [
-			thread({ id: "working", backgroundLiveness: "working" }),
-			thread({ id: "monitoring", backgroundLiveness: "monitoring" }),
-		],
-		updatedAt: "2030-01-01T12:00:00.000Z",
-	};
-	const summary = summarizeSnapshot(snapshot, now);
-	assert.equal(summary.total, 2);
-	assert.equal(summary.running, 1);
-	assert.equal(summary.monitoring, 1);
+	test("flags each parent up a live subagent chain that needs approval", () => {
+		const summary = summarizeSnapshot(
+			snapshot([
+				running({ id: "root" }),
+				running({ id: "middle", relationshipToParent: "subagent", parentThreadId: "root" }),
+				running({
+					id: "leaf",
+					relationshipToParent: "subagent",
+					parentThreadId: "middle",
+					pendingRuntimeRequest: { kind: "file_change" },
+				}),
+			]),
+			NOW,
+		);
+		assert.equal(summary.total, 1);
+		assert.equal(summary.approval, 1);
+	});
+
+	test("ignores subagent questions, finished subagents, and provider-native subagents", () => {
+		const child = (id: string, overrides: Partial<T3ThreadShell>) =>
+			running({ id, relationshipToParent: "subagent", parentThreadId: "root", ...overrides });
+		const summary = summarizeSnapshot(
+			snapshot([
+				running({ id: "root" }),
+				child("question", { pendingRuntimeRequest: { kind: "user_input" } }),
+				child("finished", {
+					status: "completed",
+					activityRunStatus: null,
+					pendingRuntimeRequest: { kind: "command" },
+				}),
+				child("native", { creationSource: "provider", pendingRuntimeRequest: { kind: "command" } }),
+			]),
+			NOW,
+		);
+		assert.equal(summary.approval, 0);
+		assert.equal(summary.working, 1);
+	});
+
+	test("survives a parent cycle", () => {
+		const summary = summarizeSnapshot(
+			snapshot([
+				running({ id: "a", relationshipToParent: "subagent", parentThreadId: "b" }),
+				running({
+					id: "b",
+					relationshipToParent: "subagent",
+					parentThreadId: "a",
+					pendingRuntimeRequest: { kind: "command" },
+				}),
+			]),
+			NOW,
+		);
+		assert.equal(summary.total, 0);
+	});
 });
 
 test("emptySummary returns a fresh all-zero summary", () => {
@@ -437,32 +414,54 @@ test("emptySummary returns a fresh all-zero summary", () => {
 		attention: 0,
 		approval: 0,
 		input: 0,
+		plan: 0,
+		limited: 0,
 		failed: 0,
 		starting: 0,
 		working: 0,
 		monitoring: 0,
-		plan: 0,
 		waiting: 0,
+		background: 0,
+		blocked: 0,
+		unseen: 0,
 	});
 	assert.notEqual(first, second);
 });
 
 describe("normalizeSettings", () => {
+	test("maps legacy displays and rejects unknown values", () => {
+		assert.equal(normalizeSettings({ displayMode: "threads" }).displayMode, "working");
+		assert.equal(normalizeSettings({ displayMode: "questions" }).displayMode, "needs");
+		assert.equal(normalizeSettings({ displayMode: "approval", theme: "gauge" }).theme, "gauge");
+		const unknown = { displayMode: "constructor", theme: "toString" } as unknown as Parameters<
+			typeof normalizeSettings
+		>[0];
+		assert.deepEqual(normalizeSettings(unknown), {
+			displayMode: "combined",
+			theme: "counter",
+			refreshSeconds: DEFAULT_REFRESH_SECONDS,
+		});
+	});
+
 	test("uses the default when the setting is absent or not finite", () => {
 		assert.deepEqual(normalizeSettings(undefined), {
 			displayMode: "combined",
+			theme: "counter",
 			refreshSeconds: DEFAULT_REFRESH_SECONDS,
 		});
 		assert.deepEqual(normalizeSettings({}), {
 			displayMode: "combined",
+			theme: "counter",
 			refreshSeconds: DEFAULT_REFRESH_SECONDS,
 		});
 		assert.deepEqual(normalizeSettings({ refreshSeconds: Number.NaN }), {
 			displayMode: "combined",
+			theme: "counter",
 			refreshSeconds: DEFAULT_REFRESH_SECONDS,
 		});
 		assert.deepEqual(normalizeSettings({ refreshSeconds: Number.POSITIVE_INFINITY }), {
 			displayMode: "combined",
+			theme: "counter",
 			refreshSeconds: DEFAULT_REFRESH_SECONDS,
 		});
 	});
@@ -470,14 +469,17 @@ describe("normalizeSettings", () => {
 	test("rounds values and clamps them to the supported interval", () => {
 		assert.deepEqual(normalizeSettings({ refreshSeconds: 21.6 }), {
 			displayMode: "combined",
+			theme: "counter",
 			refreshSeconds: 22,
 		});
 		assert.deepEqual(normalizeSettings({ refreshSeconds: MIN_REFRESH_SECONDS - 1 }), {
 			displayMode: "combined",
+			theme: "counter",
 			refreshSeconds: MIN_REFRESH_SECONDS,
 		});
 		assert.deepEqual(normalizeSettings({ refreshSeconds: MAX_REFRESH_SECONDS + 1 }), {
 			displayMode: "combined",
+			theme: "counter",
 			refreshSeconds: MAX_REFRESH_SECONDS,
 		});
 	});
@@ -485,7 +487,32 @@ describe("normalizeSettings", () => {
 	test("accepts the numeric strings emitted by a property inspector", () => {
 		assert.deepEqual(normalizeSettings({ refreshSeconds: "45" } as unknown as { refreshSeconds: number }), {
 			displayMode: "combined",
+			theme: "counter",
 			refreshSeconds: 45,
 		});
+	});
+});
+
+describe("parseThread", () => {
+	const wire = {
+		id: "thread-1",
+		status: "running",
+		hasActionableProposedPlan: false,
+		lineage: { parentThreadId: null, relationshipToParent: null },
+		updatedAt: "2030-01-01T11:00:00.000Z",
+	};
+
+	test("keeps when the user last opened a thread and whether its run waits on another thread", () => {
+		const parsed = parseThread({
+			...wire,
+			lastVisitedAt: "2030-01-01T10:00:00.000Z",
+			blockedOnThreadWait: true,
+		});
+		assert.equal(parsed.lastVisitedAt, "2030-01-01T10:00:00.000Z");
+		assert.equal(parsed.blockedOnThreadWait, true);
+		const older = parseThread(wire);
+		assert.equal("lastVisitedAt" in older, false);
+		assert.equal("blockedOnThreadWait" in older, false);
+		assert.throws(() => parseThread({ ...wire, lastVisitedAt: "not a date" }));
 	});
 });

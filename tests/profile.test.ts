@@ -36,7 +36,7 @@ test("createOverviewSlot matches OpenDeck's serialized action shape", () => {
 			image: `plugins/${PLUGIN_DIRECTORY}/icons/action.svg`,
 			image_scale: 100,
 			name: "",
-			show: true,
+			show: false,
 			size: 0,
 			stroke_colour: "#000000",
 			stroke_size: 3,
@@ -101,12 +101,12 @@ describe("placeOverview", () => {
 		assert.deepEqual(action.unknown, ["kept"]);
 		assert.deepEqual(
 			{ show: instanceState.show, size: instanceState.size, text: instanceState.text },
-			{ show: true, size: 0, text: "Loading T3 Code status" },
+			{ show: false, size: 0, text: "Loading T3 Code status" },
 		);
 		assert.equal(instanceState.instanceOnly, "kept");
 		assert.deepEqual(
 			{ show: actionState.show, size: actionState.size, text: actionState.text },
-			{ show: true, size: 0, text: "Loading T3 Code status" },
+			{ show: false, size: 0, text: "Loading T3 Code status" },
 		);
 		assert.equal(actionState.actionOnly, "kept");
 	});
@@ -137,7 +137,7 @@ describe("placeOverview", () => {
 				const state = (owner.states as Array<Record<string, unknown>>)[0];
 				assert.deepEqual(
 					{ show: state?.show, size: state?.size, text: state?.text },
-					{ show: true, size: 0, text: "Loading T3 Code status" },
+					{ show: false, size: 0, text: "Loading T3 Code status" },
 				);
 			}
 		}

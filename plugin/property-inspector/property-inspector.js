@@ -1,14 +1,36 @@
 const ACTION_UUID = "com.beastyrabbit.t3-code-status.overview";
-const SETTINGS_VERSION = 1;
+// The Overview key always shows the same counts, so it only chooses a theme.
+const ACTION_NOTES = {
+	"com.beastyrabbit.t3-code-status.overview-tile":
+		"Shows four counts on one key: running threads and what needs you on top, finished threads you have not opened and errors below.",
+};
+const SETTINGS_VERSION = 2;
+const DISPLAY_MODES = new Set([
+	"combined",
+	"working",
+	"needs",
+	"approval",
+	"question",
+	"plan",
+	"failed",
+	"limit",
+	"background",
+	"waiting",
+]);
+const LEGACY_DISPLAY_MODES = { threads: "working", questions: "needs" };
+const THEMES = new Set(["counter", "pictogram", "flood", "gauge", "quad"]);
 const MAX_ACTION_INFO_CODE_UNITS = 64 * 1024;
 const MAX_MESSAGE_CODE_UNITS = 64 * 1024;
 const MAX_CONTEXT_CODE_UNITS = 256;
+// Pair all accepts at most this many machines, the plugin's environment limit.
+const MAX_SSH_HOSTS = 16;
 const MESSAGE_RATE_WINDOW_MS = 1_000;
 const MAX_MESSAGES_PER_WINDOW = 60;
 
 let websocket;
 let inspectorContext = "";
 let actionContext = "";
+let actionUuid = ACTION_UUID;
 let socketReady = false;
 let protocolFailed = false;
 let connectionErrorShown = false;
@@ -16,6 +38,11 @@ let messageWindowStartedAt = 0;
 let messagesInWindow = 0;
 let authBusy = false;
 let connections = [];
+// Until the user types hosts, the SSH field lists the machines already paired over the network.
+let sshHostsEdited = false;
+let findBusy = false;
+// Where the result of the running pairing command appears.
+let authResult;
 
 const elements = {};
 
@@ -55,6 +82,8 @@ function connectElgatoStreamDeckSocket(
 	}
 	inspectorContext = inPropertyInspectorUUID;
 	actionContext = isBoundedContext(actionInfo.context) ? actionInfo.context : inPropertyInspectorUUID;
+	actionUuid = Object.hasOwn(ACTION_NOTES, actionInfo.action) ? actionInfo.action : ACTION_UUID;
+	showActionFields();
 	applySettings(actionInfo.payload?.settings);
 	bindControls();
 	setBusy(true);
@@ -92,19 +121,34 @@ function cacheElements() {
 	elements.connectionState = document.getElementById("connection-state");
 	elements.connectionDetail = document.getElementById("connection-detail");
 	elements.errorMessage = document.getElementById("error-message");
+	elements.displayField = document.getElementById("display-field");
+	elements.actionNote = document.getElementById("action-note");
 	elements.displayMode = document.getElementById("display-mode");
 	elements.displayNote = document.getElementById("display-note");
+	elements.theme = document.getElementById("theme");
 	elements.pairingLink = document.getElementById("pairing-link");
 	elements.allowHttp = document.getElementById("allow-http");
 	elements.pairButton = document.getElementById("pair-button");
+	elements.sshHosts = document.getElementById("ssh-hosts");
+	elements.sshPairButton = document.getElementById("ssh-pair-button");
+	elements.sshFindButton = document.getElementById("ssh-find-button");
 	elements.pairingResult = document.getElementById("pairing-result");
+	elements.sshResult = document.getElementById("ssh-result");
 	elements.environmentList = document.getElementById("environment-list");
 	elements.environmentDetail = document.getElementById("environment-detail");
 	elements.removeConnection = document.getElementById("remove-connection");
 }
 
+function showActionFields() {
+	const actionNote = ACTION_NOTES[actionUuid];
+	elements.displayField.hidden = Boolean(actionNote);
+	elements.actionNote.hidden = !actionNote;
+	elements.actionNote.textContent = actionNote ?? "";
+}
+
 function bindControls() {
 	elements.displayMode.addEventListener("change", saveDisplayMode);
+	elements.theme.addEventListener("change", saveDisplayMode);
 	elements.pairButton.addEventListener("click", () => {
 		const link = elements.pairingLink.value.trim();
 		if (!link || authBusy) return;
@@ -112,12 +156,35 @@ function bindControls() {
 			elements.pairingLink.value = "";
 			authBusy = true;
 			setSettingsEnabled(socketReady);
+			authResult = elements.pairingResult;
 			setTextContent(elements.pairingResult, "Pairing…");
+		}
+	});
+	elements.sshHosts.addEventListener("input", () => {
+		sshHostsEdited = true;
+	});
+	elements.sshFindButton.addEventListener("click", () => {
+		if (findBusy || authBusy) return;
+		if (sendToPlugin({ command: "discoverHosts" })) {
+			findBusy = true;
+			setSettingsEnabled(socketReady);
+			setTextContent(elements.sshResult, "Looking for T3 Code on Tailscale…");
+		}
+	});
+	elements.sshPairButton.addEventListener("click", () => {
+		const hosts = elements.sshHosts.value.trim();
+		if (!hosts || authBusy) return;
+		if (sendToPlugin({ command: "pairSsh", hosts, allowHttp: elements.allowHttp.checked })) {
+			authBusy = true;
+			setSettingsEnabled(socketReady);
+			authResult = elements.sshResult;
+			setTextContent(elements.sshResult, "Pairing over SSH…");
 		}
 	});
 	elements.removeConnection.addEventListener("click", () => {
 		if (!elements.environmentList.value || authBusy) return;
 		if (sendToPlugin({ command: "removeConnection", environmentId: elements.environmentList.value })) {
+			authResult = elements.pairingResult;
 			authBusy = true;
 			setSettingsEnabled(socketReady);
 		}
@@ -127,29 +194,44 @@ function bindControls() {
 
 function setSettingsEnabled(enabled) {
 	elements.displayMode.disabled = !enabled;
+	elements.theme.disabled = !enabled;
 	elements.pairingLink.disabled = !enabled || authBusy;
 	elements.allowHttp.disabled = !enabled || authBusy;
 	elements.pairButton.disabled = !enabled || authBusy;
+	elements.sshHosts.disabled = !enabled || authBusy;
+	elements.sshPairButton.disabled = !enabled || authBusy;
+	elements.sshFindButton.disabled = !enabled || authBusy || findBusy;
 	elements.environmentList.disabled = !enabled || authBusy || connections.length === 0;
 	elements.removeConnection.disabled = !enabled || authBusy || connections.length === 0;
 }
 
 function applySettings(settings) {
 	elements.displayMode.value = normalizeDisplayMode(settings?.displayMode);
+	elements.theme.value = normalizeTheme(settings?.theme);
 	updateDisplayNote();
 }
 
 function normalizeDisplayMode(value) {
-	return value === "threads" || value === "questions" ? value : "combined";
+	if (Object.hasOwn(LEGACY_DISPLAY_MODES, value)) return LEGACY_DISPLAY_MODES[value];
+	return DISPLAY_MODES.has(value) ? value : "combined";
+}
+
+function normalizeTheme(value) {
+	return THEMES.has(value) ? value : "counter";
 }
 
 function updateDisplayNote() {
 	const descriptions = {
-		combined:
-			"Shows thread counts and a blinking question mark when input, approval, or plan review is pending.",
-		threads: "Shows working threads / all open threads. This key does not blink for questions.",
-		questions:
-			"A faded question mark when clear. The whole key flashes amber while input, approval, or plan review is pending.",
+		combined: "Shows whatever is most urgent right now.",
+		working: "Shows working threads and the number of open threads.",
+		needs: "Blinks while any thread waits for your approval, answer, or plan review.",
+		approval: "Blinks while a thread waits for you to approve a command or change.",
+		question: "Blinks while a thread asks you a question.",
+		plan: "Blinks while a proposed plan waits for your review.",
+		failed: "Shows threads whose latest run failed.",
+		limit: "Shows threads paused until a provider usage limit resets.",
+		background: "Shows threads with background tasks, such as a dev server or monitor.",
+		waiting: "Shows open threads that are idle and need nothing from you.",
 	};
 	elements.displayNote.textContent = descriptions[normalizeDisplayMode(elements.displayMode.value)];
 }
@@ -160,6 +242,7 @@ function saveSettings() {
 		context: actionContext,
 		payload: {
 			displayMode: normalizeDisplayMode(elements.displayMode.value),
+			theme: normalizeTheme(elements.theme.value),
 			settingsVersion: SETTINGS_VERSION,
 		},
 	});
@@ -172,7 +255,7 @@ function saveDisplayMode() {
 
 function sendToPlugin(payload) {
 	return sendSocketMessage({
-		action: ACTION_UUID,
+		action: actionUuid,
 		event: "sendToPlugin",
 		context: actionContext,
 		payload,
@@ -191,6 +274,12 @@ function sendSocketMessage(message) {
 		showConnectionError("OpenDeck could not save the setting.");
 		return false;
 	}
+}
+
+function describePairingResult(payload) {
+	if (payload.error) return localizeRuntimeError(payload.error);
+	if (Array.isArray(payload.hosts)) return describeSshResults(payload.hosts.slice(0, 16));
+	return "Connection settings saved.";
 }
 
 function handleSocketMessage(event) {
@@ -220,10 +309,13 @@ function handleSocketMessage(event) {
 	if (message.event === "sendToPropertyInspector" && message.payload?.type === "pairingResult") {
 		authBusy = false;
 		setSettingsEnabled(socketReady);
-		setTextContent(
-			elements.pairingResult,
-			message.payload.error ? localizeRuntimeError(message.payload.error) : "Connection settings saved.",
-		);
+		setTextContent(authResult ?? elements.pairingResult, describePairingResult(message.payload));
+		return;
+	}
+	if (message.event === "sendToPropertyInspector" && message.payload?.type === "discoveryResult") {
+		findBusy = false;
+		setSettingsEnabled(socketReady);
+		showDiscoveredHosts(message.payload.hosts);
 		return;
 	}
 	if (message.event !== "sendToPropertyInspector" || message.payload?.type !== "connectionStatus") return;
@@ -325,6 +417,8 @@ function runtimeErrorLabel(code) {
 			return "Connecting";
 		case "invalid-response":
 			return "Connection incompatible";
+		case "unsupported-version":
+			return "Unsupported T3 version";
 		default:
 			return "Connection unavailable";
 	}
@@ -352,6 +446,10 @@ function localizeRuntimeError(code) {
 			return "The plugin could not securely read or save its credentials. Check permissions on its private configuration folder.";
 		case "busy":
 			return "Another connection change is still in progress.";
+		case "unsupported-version":
+			return "This T3 Code version uses a different orchestration protocol. Update T3 Code or this plugin.";
+		case "invalid-host":
+			return "Enter up to 16 host names separated by commas, like anvil, kiln, devbox:3774.";
 		case "offline":
 			return "A paired environment is unreachable. Retrying automatically.";
 		case "invalid-response":
@@ -379,9 +477,85 @@ function normalizeConnectionStatus(status) {
 }
 
 function connectedDetail(status) {
+	// Machines that are offline or still connecting are left out of the counts.
+	const missing = connections
+		.filter((item) => item.state !== "connected")
+		.map((item) => String(item.label).slice(0, 80));
+	if (missing.length > 0) {
+		const live = status.environments - missing.length;
+		return `${live} of ${status.environments} Environments live · not counted: ${missing.join(", ")}`;
+	}
 	const environmentLabel =
 		status.environments === 1 ? "1 Environment" : `${status.environments} Environments`;
 	return `${environmentLabel} · live stream · read only`;
+}
+
+/** One line for the paired machines, then one short line per machine that failed. */
+function describeSshResults(results) {
+	const name = (result) => (typeof result?.host === "string" ? result.host.slice(0, 260) : "?");
+	const paired = results.filter((result) => !result?.error).map(name);
+	const failed = results
+		.filter((result) => result?.error)
+		.map((result) => `${name(result)}: ${sshErrorMessage(String(result.error))}`);
+	return [paired.length ? `Paired ${paired.join(", ")}.` : "Nothing was paired.", ...failed].join("\n");
+}
+
+function sshErrorMessage(code) {
+	switch (code) {
+		case "ssh-failed":
+			return "SSH login failed";
+		case "t3-missing":
+		case "t3-failed":
+			return "no working t3 command over SSH";
+		case "offline":
+			return "T3 Code not reachable; turn on Network access there";
+		case "insecure-origin":
+			return "allow unencrypted HTTP to pair it";
+		default:
+			return localizeRuntimeError(code);
+	}
+}
+
+function showDiscoveredHosts(value) {
+	const found = Array.isArray(value)
+		? value.filter((host) => typeof host === "string" && host.length <= 260).slice(0, 64)
+		: [];
+	if (!found.length) {
+		setTextContent(
+			elements.sshResult,
+			"No T3 Code found on Tailscale. Each machine needs Network access turned on in T3 Code.",
+		);
+		return;
+	}
+	const current = elements.sshHosts.value.split(/[\s,]+/).filter(Boolean);
+	const merged = [...new Set([...current, ...found])];
+	elements.sshHosts.value = merged.slice(0, MAX_SSH_HOSTS).join(", ");
+	sshHostsEdited = true;
+	const machines = found.length === 1 ? "machine" : "machines";
+	const leftOut = merged.length - MAX_SSH_HOSTS;
+	setTextContent(
+		elements.sshResult,
+		leftOut > 0
+			? `Found ${found.length} ${machines}. Pair all takes ${MAX_SSH_HOSTS} at a time; ${leftOut} did not fit in the list.`
+			: `Found ${found.length} ${machines}. Press Pair all.`,
+	);
+}
+
+/** Remote machines already paired over plain HTTP, as host or host:port. */
+function pairedSshHosts(items) {
+	const hosts = new Set();
+	for (const item of items) {
+		try {
+			const url = new URL(item.origin);
+			// Pair all takes host names and IPv4 addresses, not bracketed IPv6 literals.
+			const local = ["localhost", "127.0.0.1"].includes(url.hostname);
+			if (url.protocol !== "http:" || local || url.hostname.startsWith("[")) continue;
+			hosts.add(url.port && url.port !== "3773" ? `${url.hostname}:${url.port}` : url.hostname);
+		} catch {
+			// Skip origins that are not URLs.
+		}
+	}
+	return [...hosts].join(", ");
 }
 
 function setBusy(busy) {
@@ -408,6 +582,7 @@ function renderEnvironments(items) {
 		options.push(option);
 	}
 	elements.environmentList.replaceChildren(...options);
+	if (!sshHostsEdited) elements.sshHosts.value = pairedSshHosts(connections);
 	if (connections.some((item) => item.environmentId === previous)) elements.environmentList.value = previous;
 	renderEnvironmentDetail();
 	setSettingsEnabled(socketReady);

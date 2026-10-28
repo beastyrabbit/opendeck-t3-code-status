@@ -30,9 +30,6 @@ importers:
       lefthook:
         specifier: ^2.1.12
         version: 2.1.12
-      snappyjs:
-        specifier: ^0.7.0
-        version: 0.7.0
       tsx:
         specifier: ^4.23.13
         version: 4.23.13
@@ -758,9 +755,6 @@ packages:
     resolution: {integrity: sha512-bzyZ1e88w9O1iNJbKnOlvYTrWPDl46O1bG0D3XInv+9tkPrxrN8jUUTiFlDkkmKWgn1M6CfIA13SuGqOa9Korw==}
     engines: {node: '>=14'}
 
-  snappyjs@0.7.0:
-    resolution: {integrity: sha512-u5iEEXkMe2EInQio6Wv9LWHOQYRDbD2O9hzS27GpT/lwfIQhTCnHCTqedqHIHe9ZcvQo+9au6vngQayipz1NYw==}
-
   string-width@4.2.3:
     resolution: {integrity: sha512-wKyQRQpjJ0sIp62ErSZdGsjMJWsap5oRNihHhu6G7JVO/9jIB6UyevL+tXuOqrng8j/cxKTWyWUwvSTriiZz/g==}
     engines: {node: '>=8'}
@@ -1357,8 +1351,6 @@ snapshots:
   semver@7.8.5: {}
 
   signal-exit@4.1.0: {}
-
-  snappyjs@0.7.0: {}
 
   string-width@4.2.3:
     dependencies:
