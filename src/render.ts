@@ -622,8 +622,9 @@ const flood: ThemeRenderer = {
 					text(x + 60, y + 13 + 0.365 * 15, String(waiting), 15, C.ink, { anchor: "end" });
 			const size = numeralSize(count, 46, 38);
 			const two = String(count).length >= 2;
+			const ink = count > 0 ? C.ink : mix(C.ink, color, 0.55);
 			return (
-				svg + text(x + (two ? 34.5 : 37.5), y + (two ? 41 : 39) + 0.365 * size, String(count), size, C.ink)
+				svg + text(x + (two ? 34.5 : 37.5), y + (two ? 41 : 39) + 0.365 * size, String(count), size, ink)
 			);
 		});
 	},

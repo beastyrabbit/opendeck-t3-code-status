@@ -144,12 +144,17 @@ describe("renderKey", () => {
 			svg(renderKey(ready({ total: 2, running: 2, working: 2 }), "overview", "quad")),
 			/#97A5B0/,
 		);
-		// When every running thread only waits, the cell stays lit with a dim zero and the waiting count.
-		const allWaiting = svg(
-			renderKey(ready({ total: 2, running: 2, working: 2, blocked: 2 }), "overview", "quad"),
-		);
-		assert.match(allWaiting, /fill="#4A5862"[^>]*>0<\/text>/);
-		assert.match(allWaiting, /fill="#97A5B0"[^>]*>2<\/text>/);
+		// When every running thread only waits, the cell stays lit with a dim zero.
+		for (const theme of THEMES) {
+			const allWaiting = svg(
+				renderKey(ready({ total: 2, running: 2, working: 2, blocked: 2 }), "overview", theme),
+			);
+			assert.match(allWaiting, /#4CE08A/, `${theme} lit`);
+			const zero = allWaiting.match(/fill="(#[0-9A-F]{6})"[^>]*>0<\/text>/)?.[1];
+			assert.ok(zero, `${theme} zero`);
+			// Full-contrast count colours: green, white, and the ink on a lit Flood cell.
+			assert.ok(!["#4CE08A", "#F2F6F8", "#0B1116"].includes(zero), `${theme} zero is dim, not ${zero}`);
+		}
 	});
 
 	test("the Thread status key shows unseen finished threads before running ones", () => {
