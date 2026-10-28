@@ -22,6 +22,8 @@ const THEMES = new Set(["counter", "pictogram", "flood", "gauge", "quad"]);
 const MAX_ACTION_INFO_CODE_UNITS = 64 * 1024;
 const MAX_MESSAGE_CODE_UNITS = 64 * 1024;
 const MAX_CONTEXT_CODE_UNITS = 256;
+// Pair all accepts at most this many machines, the plugin's environment limit.
+const MAX_SSH_HOSTS = 16;
 const MESSAGE_RATE_WINDOW_MS = 1_000;
 const MAX_MESSAGES_PER_WINDOW = 60;
 
@@ -518,11 +520,16 @@ function showDiscoveredHosts(value) {
 		return;
 	}
 	const current = elements.sshHosts.value.split(/[\s,]+/).filter(Boolean);
-	elements.sshHosts.value = [...new Set([...current, ...found])].join(", ");
+	const merged = [...new Set([...current, ...found])];
+	elements.sshHosts.value = merged.slice(0, MAX_SSH_HOSTS).join(", ");
 	sshHostsEdited = true;
+	const machines = found.length === 1 ? "machine" : "machines";
+	const leftOut = merged.length - MAX_SSH_HOSTS;
 	setTextContent(
 		elements.sshResult,
-		`Found ${found.length} ${found.length === 1 ? "machine" : "machines"}. Press Pair all.`,
+		leftOut > 0
+			? `Found ${found.length} ${machines}. Pair all takes ${MAX_SSH_HOSTS} at a time; ${leftOut} did not fit in the list.`
+			: `Found ${found.length} ${machines}. Press Pair all.`,
 	);
 }
 

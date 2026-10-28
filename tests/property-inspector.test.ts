@@ -386,6 +386,14 @@ test("Find adds the T3 machines found on the tailnet to the SSH host list", () =
 	result([]);
 	assert.equal(hosts.value, "anvil, kiln, mac-mini");
 	assert.match(elements.get("ssh-result")?.textContent ?? "", /^No T3 Code found on Tailscale/);
+	// Pair all takes at most 16 machines, so the list never grows past that.
+	result(Array.from({ length: 20 }, (_, index) => `host-${index}`));
+	assert.equal(hosts.value.split(", ").length, 16);
+	assert.equal(hosts.value.split(", ").slice(0, 3).join(", "), "anvil, kiln, mac-mini");
+	assert.equal(
+		elements.get("ssh-result")?.textContent,
+		"Found 20 machines. Pair all takes 16 at a time; 7 did not fit in the list.",
+	);
 });
 
 test("connection updates use one atomic live region for status, detail, and recovery guidance", () => {
