@@ -317,7 +317,7 @@ test("SSH pairing lists the paired remote machines, sends the hosts, and reports
 	const button = elements.get("ssh-pair-button");
 	assert.ok(hosts);
 	assert.ok(button);
-	const status = (origins: string[]) =>
+	const status = (origins: Array<string | { origin: string; host: string }>) =>
 		connection.emit("message", {
 			data: JSON.stringify({
 				event: "sendToPropertyInspector",
@@ -329,9 +329,9 @@ test("SSH pairing lists the paired remote machines, sends the hosts, and reports
 						connections: origins.map((origin, index) => ({
 							environmentId: `env-${index}`,
 							label: `Env ${index}`,
-							origin,
 							expiresAt: 0,
 							state: "connected",
+							...(typeof origin === "string" ? { origin } : origin),
 						})),
 					},
 				},
@@ -343,8 +343,11 @@ test("SSH pairing lists the paired remote machines, sends the hosts, and reports
 		"http://devbox:3774",
 		"https://t3.example.com",
 		"http://[fd7a:115c:a1e0::1]:3773",
+		// Tailscale pairings are saved at their address but renew through the machine name.
+		{ origin: "http://100.80.1.2:3773", host: "mac-mini" },
+		{ origin: "http://[fd7a:115c:a1e0::2]:3774", host: "v6box" },
 	]);
-	assert.equal(hosts.value, "anvil, devbox:3774");
+	assert.equal(hosts.value, "anvil, devbox:3774, mac-mini, v6box:3774");
 	hosts.value = "anvil, kiln";
 	hosts.emit("input");
 	status(["http://anvil:3773"]);

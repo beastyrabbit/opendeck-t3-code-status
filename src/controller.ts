@@ -31,7 +31,7 @@ const LEGACY_REFRESH_SECONDS = 15;
 
 export interface T3StatusClient {
 	subscribe?(listener: () => void): () => void;
-	pair?(link: string, allowHttp: boolean): Promise<void>;
+	pair?(link: string, allowHttp: boolean, host?: string): Promise<void>;
 	remove?(environmentId: string): Promise<void>;
 	reconnect?(): Promise<void>;
 	dispose?(): Promise<void>;
@@ -490,21 +490,24 @@ export class T3CodeController {
 	 */
 	private async pairLink(link: string, allowHttp: boolean): Promise<void> {
 		const pinned = allowHttp ? undefined : await this.pinToTailnet(link);
-		await this.client.pair?.(pinned ?? link, allowHttp || pinned !== undefined);
+		if (pinned) await this.client.pair?.(pinned.link, true, pinned.host);
+		else await this.client.pair?.(link, allowHttp);
 	}
 
-	private async pinToTailnet(link: string): Promise<string | undefined> {
+	/** The link pointed at its server's Tailscale address, and the machine name it had, for SSH renewal. */
+	private async pinToTailnet(link: string): Promise<{ link: string; host: string } | undefined> {
 		try {
 			const url = new URL(link.trim());
 			const hostParam = url.searchParams.get("host");
 			const server = new URL(parsePairingLink(link, true).origin);
 			if (server.protocol !== "http:") return undefined;
-			const address = await this.tailnetAddress(server.hostname.replace(/^\[|\]$/g, ""));
+			const host = server.hostname.replace(/^\[|\]$/g, "");
+			const address = await this.tailnetAddress(host);
 			if (!address) return undefined;
 			server.hostname = address.includes(":") ? `[${address}]` : address;
 			if (hostParam) url.searchParams.set("host", server.origin);
 			else url.host = server.host;
-			return url.toString();
+			return { link: url.toString(), host };
 		} catch {
 			return undefined;
 		}

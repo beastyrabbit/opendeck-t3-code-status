@@ -931,9 +931,9 @@ test("SSH pairing pairs every host it can and reports each one without leaking t
 test("tailnet discovery reports found hosts, and tailnet hosts pair at their Tailscale address without the opt-in", async () => {
 	const host = new FakeHost();
 	const client = new FakeClient() as FakeClient & T3StatusClient;
-	const paired: Array<{ link: string; allowHttp: boolean }> = [];
-	client.pair = async (link, allowHttp) => {
-		paired.push({ link, allowHttp });
+	const paired: Array<{ link: string; allowHttp: boolean; host?: string }> = [];
+	client.pair = async (link, allowHttp, host) => {
+		paired.push({ link, allowHttp, ...(host ? { host } : {}) });
 	};
 	let discoveries = 0;
 	const controller = new T3CodeController(host, client, {
@@ -959,7 +959,7 @@ test("tailnet discovery reports found hosts, and tailnet hosts pair at their Tai
 	await new Promise((resolve) => setImmediate(resolve));
 	// The exempt host is paired at its Tailscale address, so a later DNS answer cannot redirect it.
 	assert.deepEqual(paired, [
-		{ link: "http://100.80.1.1:3774/pair#token=fixture", allowHttp: true },
+		{ link: "http://100.80.1.1:3774/pair#token=fixture", allowHttp: true, host: "anvil" },
 		{ link: "http://kiln/pair#token=fixture", allowHttp: false },
 	]);
 
@@ -973,9 +973,13 @@ test("tailnet discovery reports found hosts, and tailnet hosts pair at their Tai
 		await new Promise((resolve) => setImmediate(resolve));
 	}
 	assert.deepEqual(paired.slice(2), [
-		{ link: "http://100.80.1.1:3773/pair#token=fixture", allowHttp: true },
+		{ link: "http://100.80.1.1:3773/pair#token=fixture", allowHttp: true, host: "anvil" },
 		{ link: "http://kiln:3773/pair#token=fixture", allowHttp: false },
-		{ link: "https://app.t3.codes/pair?host=http%3A%2F%2F100.80.1.1%3A3773#token=fixture", allowHttp: true },
+		{
+			link: "https://app.t3.codes/pair?host=http%3A%2F%2F100.80.1.1%3A3773#token=fixture",
+			allowHttp: true,
+			host: "anvil",
+		},
 	]);
 	await controller.dispose();
 });

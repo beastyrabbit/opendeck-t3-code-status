@@ -12,6 +12,8 @@ export interface SavedConnection {
 	token: string;
 	expiresAt: number;
 	allowHttp: boolean;
+	/** The machine name a Tailscale pairing was made with, when its origin is the pinned Tailscale address. */
+	host?: string;
 }
 export interface ConnectionStore {
 	load(): Promise<SavedConnection[]>;
@@ -56,6 +58,7 @@ export class FileConnectionStore implements ConnectionStore {
 						typeof item.expiresAt !== "number" ||
 						!Number.isFinite(item.expiresAt) ||
 						typeof item.allowHttp !== "boolean" ||
+						(item.host !== undefined && !textValue(item.host, 260)) ||
 						originFrom(item.origin, item.allowHttp) !== item.origin
 					)
 						throw new Error();

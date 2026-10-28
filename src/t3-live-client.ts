@@ -102,7 +102,7 @@ export class T3LiveClient {
 		this.environments.set(saved.environmentId, env);
 		void this.connect(env);
 	}
-	async pair(link: string, allowHttp = false): Promise<void> {
+	async pair(link: string, allowHttp = false, host?: string): Promise<void> {
 		await this.ready;
 		if (this.busy) throw new LiveConnectionError("busy");
 		if (this.disposed) return;
@@ -146,6 +146,7 @@ export class T3LiveClient {
 				token: response.access_token,
 				expiresAt: this.now() + response.expires_in * 1000,
 				allowHttp,
+				...(host ? { host } : {}),
 			};
 			const session = await this.request(target.origin, "/api/auth/session", {
 				headers: { authorization: `Bearer ${saved.token}` },
@@ -206,6 +207,7 @@ export class T3LiveClient {
 			expiresAt: env.saved.expiresAt,
 			state: env.state,
 			...(env.error ? { error: env.error } : {}),
+			...(env.saved.host ? { host: env.saved.host } : {}),
 		}));
 		const state = this.loadError ? "error" : overallState(connections);
 		return {

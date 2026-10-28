@@ -166,6 +166,8 @@ export interface EnvironmentStatus {
 	expiresAt: number;
 	state: "connected" | "connecting" | "offline" | "authorization-required";
 	error?: string;
+	/** The machine name a Tailscale pairing was made with; its origin is then the Tailscale address. */
+	host?: string;
 }
 
 export type ConnectionStatus =

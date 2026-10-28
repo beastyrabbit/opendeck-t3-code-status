@@ -547,10 +547,12 @@ function pairedSshHosts(items) {
 	for (const item of items) {
 		try {
 			const url = new URL(item.origin);
-			// Pair all takes host names and IPv4 addresses, not bracketed IPv6 literals.
-			const local = ["localhost", "127.0.0.1"].includes(url.hostname);
-			if (url.protocol !== "http:" || local || url.hostname.startsWith("[")) continue;
-			hosts.add(url.port && url.port !== "3773" ? `${url.hostname}:${url.port}` : url.hostname);
+			// Tailscale pairings keep the machine name they were made with; their origin is the address.
+			const name = typeof item.host === "string" ? item.host.slice(0, 260) : url.hostname;
+			// Pair all takes host names and IPv4 addresses, not IPv6 literals.
+			const local = ["localhost", "127.0.0.1"].includes(name);
+			if (url.protocol !== "http:" || local || name.startsWith("[") || name.includes(":")) continue;
+			hosts.add(url.port && url.port !== "3773" ? `${name}:${url.port}` : name);
 		} catch {
 			// Skip origins that are not URLs.
 		}

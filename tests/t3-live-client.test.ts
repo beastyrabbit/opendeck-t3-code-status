@@ -404,12 +404,14 @@ test("restore credentials across plugin restarts and reject excessive scopes wit
 	const server = await fixture(context);
 	const store = new MemoryStore();
 	const first = new T3LiveClient({ store });
-	await first.pair(server.link);
+	await first.pair(server.link, false, "studio");
 	await connected(first);
 	await first.dispose();
 	const client = new T3LiveClient({ store });
 	context.after(() => client.dispose());
 	await connected(client);
+	const restored = await client.getConnectionStatus();
+	assert.equal("connections" in restored && restored.connections[0]?.host, "studio");
 	assert.equal(server.requests.filter((item) => item.path === "/oauth/token").length, 1);
 	server.setScope("orchestration:read orchestration:operate");
 	await assert.rejects(client.pair(server.link), { code: "invalid-response" });
@@ -447,6 +449,7 @@ test("credentials persist with private permissions, and corrupt stores fail clos
 			token: "fixture",
 			expiresAt: Date.now() + 1000,
 			allowHttp: false,
+			host: "studio",
 		},
 	];
 	await store.save(values);
