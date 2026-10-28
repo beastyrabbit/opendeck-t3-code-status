@@ -64,7 +64,8 @@ async function createDeterministicPluginArchive(): Promise<void> {
 
 async function createDeterministicSetupArchive(): Promise<void> {
 	await mkdir(setupRoot, { recursive: true });
-	await cp(resolve(projectRoot, "README.md"), resolve(setupRoot, "README.md"));
+	// The setup archive's README is the Linux setup guide, which needs no other docs page.
+	await cp(resolve(projectRoot, "docs", "user", "linux-setup.md"), resolve(setupRoot, "README.md"));
 	await cp(resolve(distRoot, "setup-opendeck.mjs"), resolve(setupRoot, "setup-opendeck.mjs"));
 	await cp(resolve(distRoot, PLUGIN_DIRECTORY), resolve(setupRoot, PLUGIN_DIRECTORY), {
 		recursive: true,

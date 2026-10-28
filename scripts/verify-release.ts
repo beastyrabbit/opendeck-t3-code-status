@@ -87,7 +87,7 @@ export async function verifyRelease(projectRoot: string): Promise<void> {
 			"the setup executable",
 		);
 		await compareFiles(
-			resolve(projectRoot, "README.md"),
+			resolve(projectRoot, "docs", "user", "linux-setup.md"),
 			resolve(setupRoot, "README.md"),
 			"the setup README",
 		);

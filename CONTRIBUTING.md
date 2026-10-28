@@ -10,6 +10,8 @@ pnpm verify
 pnpm package
 ```
 
-Keep changes small enough to review. Add tests for behavior changes, avoid real credentials and private T3 data in fixtures, and do not commit generated `dist/` or `release/` output.
+[Development](docs/dev/development.md) covers the commands, testing on real keys, packaging, and releases. [Architecture](docs/dev/architecture.md) explains how the plugin is put together and how it counts threads.
+
+Keep changes small enough to review. Add tests for behavior changes, avoid real credentials and private T3 data in fixtures, and do not commit generated `dist/` or `release/` output. When a change alters how a key looks, run `pnpm docs:images` and commit the updated pictures.
 
 If an AI tool materially helped write a contribution, disclose that in the pull request. You remain responsible for understanding the code, checking its behavior, and writing the issue or pull-request discussion yourself.
