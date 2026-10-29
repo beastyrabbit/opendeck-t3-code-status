@@ -346,8 +346,10 @@ test("SSH pairing lists the paired remote machines, sends the hosts, and reports
 		// Tailscale pairings are saved at their address but renew through the machine name.
 		{ origin: "http://100.80.1.2:3773", host: "mac-mini" },
 		{ origin: "http://[fd7a:115c:a1e0::2]:3774", host: "v6box" },
+		// So are pairings at a Tailscale HTTPS address.
+		{ origin: "https://kiln.example.ts.net", host: "kiln" },
 	]);
-	assert.equal(hosts.value, "anvil, devbox:3774, mac-mini, v6box:3774");
+	assert.equal(hosts.value, "anvil, devbox:3774, mac-mini, v6box:3774, kiln");
 	hosts.value = "anvil, kiln";
 	hosts.emit("input");
 	status(["http://anvil:3773"]);
