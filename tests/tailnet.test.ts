@@ -7,6 +7,7 @@ import {
 	sshPairingIssuer,
 	type TailnetPeer,
 	tailnetAddress,
+	tailnetHttpsOrigin,
 } from "../src/tailnet.js";
 
 const STATUS = JSON.stringify({
@@ -29,16 +30,19 @@ test("discovery probes online peers and returns the ones running T3 by their sho
 		},
 		async (origin) => {
 			probed.push(origin);
-			if (origin.includes("mac-mini")) throw new Error("timeout");
-			return origin.includes("anvil");
+			if (origin === "http://mac-mini.example.ts.net:3773") throw new Error("connection refused");
+			// A server that listens only locally answers at its Tailscale HTTPS address.
+			return origin.includes("anvil") || origin === "https://mac-mini.example.ts.net";
 		},
 	);
-	assert.deepEqual(probed, [
+	assert.deepEqual(probed.sort(), [
 		"http://anvil.example.ts.net:3773",
 		"http://homedash.example.ts.net:3773",
 		"http://mac-mini.example.ts.net:3773",
+		"https://homedash.example.ts.net",
+		"https://mac-mini.example.ts.net",
 	]);
-	assert.deepEqual(hosts, ["anvil"]);
+	assert.deepEqual(hosts, ["anvil", "mac-mini"]);
 });
 
 test("discovery finds nothing when Tailscale is missing or prints something unexpected", async () => {
@@ -124,4 +128,23 @@ test("the SSH pairing issuer reads the alias table once per batch and connects t
 	time = 60_000;
 	await issue("anvil");
 	assert.equal(calls.filter((call) => call[0] === "tailscale").length, 2);
+});
+
+test("the Tailscale HTTPS address is found by an online device's name or any of its addresses", async () => {
+	const status = JSON.stringify({
+		Peer: {
+			a: {
+				DNSName: "devbox.example.ts.net.",
+				Online: true,
+				TailscaleIPs: ["100.97.1.1", "fd7a:115c:a1e0::1"],
+			},
+			b: { DNSName: "kiln.example.ts.net.", Online: false, TailscaleIPs: ["100.97.1.2"] },
+		},
+	});
+	const run = async () => ({ code: 0, stdout: status });
+	for (const name of ["devbox", "DevBox", "devbox.example.ts.net", "100.97.1.1", "[fd7a:115c:a1e0::1]"])
+		assert.equal(await tailnetHttpsOrigin(name, run), "https://devbox.example.ts.net");
+	assert.equal(await tailnetHttpsOrigin("kiln", run), undefined);
+	assert.equal(await tailnetHttpsOrigin("127.0.0.1", run), undefined);
+	assert.equal(await tailnetHttpsOrigin("devbox", async () => ({ code: 255, stdout: "" })), undefined);
 });

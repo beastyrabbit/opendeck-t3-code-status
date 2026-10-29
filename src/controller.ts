@@ -7,7 +7,7 @@ import {
 import { getAccessibleTitle, isAlerting, renderKey } from "./render.js";
 import { parseSshHosts } from "./ssh-pairing.js";
 import { LiveConnectionError, parsePairingLink } from "./t3-protocol.js";
-import { discoverTailnetHosts, sshPairingIssuer, tailnetAddress } from "./tailnet.js";
+import { discoverTailnetHosts, sshPairingIssuer, tailnetAddress, tailnetHttpsOrigin } from "./tailnet.js";
 import {
 	ACTION_UUID,
 	ACTION_UUIDS,
@@ -47,6 +47,8 @@ export interface T3CodeControllerOptions {
 	discoverHosts?: () => Promise<string[]>;
 	/** The address that makes plain HTTP to a host safe without the user's opt-in: its Tailscale address by default. */
 	tailnetAddress?: (hostname: string) => Promise<string | undefined>;
+	/** The HTTPS address to pair at when a host's plain-HTTP server does not answer: its Tailscale HTTPS address by default. */
+	tailnetHttpsOrigin?: (hostname: string) => Promise<string | undefined>;
 	now?: () => number;
 }
 
@@ -75,6 +77,7 @@ export class T3CodeController {
 	private readonly issuePairingLink: (host: string) => Promise<string>;
 	private readonly discoverHosts: () => Promise<string[]>;
 	private readonly tailnetAddress: (hostname: string) => Promise<string | undefined>;
+	private readonly tailnetHttpsOrigin: (hostname: string) => Promise<string | undefined>;
 	/** Open settings panels, with the action of their key. */
 	private readonly inspectorContexts = new Map<string, string>();
 	private readonly lastForcedRefreshAt = new Map<string, number>();
@@ -109,6 +112,7 @@ export class T3CodeController {
 		this.issuePairingLink = options.issuePairingLink ?? sshPairingIssuer();
 		this.discoverHosts = options.discoverHosts ?? (() => discoverTailnetHosts());
 		this.tailnetAddress = options.tailnetAddress ?? ((hostname) => tailnetAddress(hostname));
+		this.tailnetHttpsOrigin = options.tailnetHttpsOrigin ?? ((hostname) => tailnetHttpsOrigin(hostname));
 		this.unsubscribe = client.subscribe?.(() => {
 			if (this.disposed) return;
 			this.connectionStatusKnown = false;
@@ -487,27 +491,59 @@ export class T3CodeController {
 	/**
 	 * Pairs a link. Without the user's opt-in, a plain-HTTP server that resolves only to Tailscale is
 	 * paired at its Tailscale address, so a later DNS answer can never send its credentials elsewhere.
+	 * A plain-HTTP server that does not answer is paired at its Tailscale HTTPS address instead.
 	 */
 	private async pairLink(link: string, allowHttp: boolean): Promise<void> {
-		const pinned = allowHttp ? undefined : await this.pinToTailnet(link);
-		if (pinned) await this.client.pair?.(pinned.link, true, pinned.host);
-		else await this.client.pair?.(link, allowHttp);
+		try {
+			const pinned = allowHttp ? undefined : await this.pinToTailnet(link);
+			if (pinned) await this.client.pair?.(pinned.link, true, pinned.host);
+			else await this.client.pair?.(link, allowHttp);
+		} catch (error) {
+			const https = clientErrorCode(error) === "offline" ? await this.overTailnetHttps(link) : undefined;
+			if (!https) throw error;
+			await this.client.pair?.(https.link, false, https.host);
+		}
 	}
 
 	/** The link pointed at its server's Tailscale address, and the machine name it had, for SSH renewal. */
 	private async pinToTailnet(link: string): Promise<{ link: string; host: string } | undefined> {
+		return this.retargetHttpLink(link, async (server) => {
+			const address = await this.tailnetAddress(server.hostname.replace(/^\[|\]$/g, ""));
+			if (!address) return undefined;
+			server.hostname = address.includes(":") ? `[${address}]` : address;
+			return server.origin;
+		});
+	}
+
+	/** The link pointed at its server's Tailscale HTTPS address, and the machine name it had. */
+	private async overTailnetHttps(link: string): Promise<{ link: string; host: string } | undefined> {
+		return this.retargetHttpLink(link, (server) =>
+			this.tailnetHttpsOrigin(server.hostname.replace(/^\[|\]$/g, "")),
+		);
+	}
+
+	/** Points a plain-HTTP pairing link at the origin `target` picks for its server, keeping the machine name. */
+	private async retargetHttpLink(
+		link: string,
+		target: (server: URL) => Promise<string | undefined>,
+	): Promise<{ link: string; host: string } | undefined> {
 		try {
 			const url = new URL(link.trim());
 			const hostParam = url.searchParams.get("host");
 			const server = new URL(parsePairingLink(link, true).origin);
 			if (server.protocol !== "http:") return undefined;
 			const host = server.hostname.replace(/^\[|\]$/g, "");
-			const address = await this.tailnetAddress(host);
-			if (!address) return undefined;
-			server.hostname = address.includes(":") ? `[${address}]` : address;
-			if (hostParam) url.searchParams.set("host", server.origin);
-			else url.host = server.host;
-			return { link: url.toString(), host };
+			const origin = await target(server);
+			if (!origin) return undefined;
+			if (hostParam) {
+				url.searchParams.set("host", origin);
+				return { link: url.toString(), host };
+			}
+			const retargeted = new URL(origin);
+			retargeted.pathname = url.pathname;
+			retargeted.search = url.search;
+			retargeted.hash = url.hash;
+			return { link: retargeted.toString(), host };
 		} catch {
 			return undefined;
 		}

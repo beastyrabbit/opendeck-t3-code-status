@@ -28,8 +28,8 @@ export interface TailnetPeer {
 export type AddressLookup = (hostname: string) => Promise<Array<{ address: string; family: number }>>;
 
 /**
- * Lists the online tailnet devices that answer as a T3 server on the default port, by their
- * MagicDNS short name.
+ * Lists the online tailnet devices that answer as a T3 server, on the default port or at their Tailscale
+ * HTTPS address, by their MagicDNS short name.
  */
 export async function discoverTailnetHosts(
 	run: CommandRunner = statusRunner,
@@ -37,7 +37,11 @@ export async function discoverTailnetHosts(
 ): Promise<string[]> {
 	const peers = (await tailnetPeers(run)).slice(0, MAX_PEERS);
 	const answers = await Promise.all(
-		peers.map((peer) => probe(`http://${peer.dnsName}:${T3_PORT}`).catch(() => false)),
+		peers.map(
+			async (peer) =>
+				(await probe(`http://${peer.dnsName}:${T3_PORT}`).catch(() => false)) ||
+				probe(`https://${peer.dnsName}`).catch(() => false),
+		),
 	);
 	return peers.filter((_, index) => answers[index]).map((peer) => peer.name);
 }
@@ -67,6 +71,25 @@ export async function tailnetPeers(run: CommandRunner = statusRunner): Promise<T
 		});
 	}
 	return peers;
+}
+
+/**
+ * The HTTPS address Tailscale serves an online tailnet device at, such as `https://devbox.example.ts.net`,
+ * found by its name or any of its addresses. A T3 server that listens only on its own machine is
+ * reachable there through `tailscale serve`, the way the T3 app reaches it.
+ */
+export async function tailnetHttpsOrigin(
+	hostname: string,
+	run: CommandRunner = statusRunner,
+): Promise<string | undefined> {
+	const name = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+	const peer = (await tailnetPeers(run)).find(
+		(candidate) =>
+			candidate.name.toLowerCase() === name ||
+			candidate.dnsName.toLowerCase() === name ||
+			candidate.addresses.includes(name),
+	);
+	return peer ? `https://${peer.dnsName}` : undefined;
 }
 
 /**

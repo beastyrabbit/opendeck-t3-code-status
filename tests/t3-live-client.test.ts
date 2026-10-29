@@ -544,3 +544,69 @@ test("HTTP redirects are refused before credentials are sent to another origin",
 	});
 	assert.equal(store.values.length, 0);
 });
+
+test("a saved machine whose plain-HTTP server stops answering moves to its HTTPS address with the same login", async (context) => {
+	const server = await fixture(context);
+	const store = new MemoryStore();
+	const first = new T3LiveClient({ store });
+	await first.pair(server.link);
+	await connected(first);
+	await first.dispose();
+	// The saved address now refuses connections, as a server that listens only locally does.
+	const saved = store.values[0];
+	assert.ok(saved);
+	store.values = [{ ...saved, origin: "http://127.0.0.1:1", allowHttp: true }];
+	const asked: string[] = [];
+	const client = new T3LiveClient({
+		store,
+		retryMs: 10,
+		httpsOrigin: async (hostname) => {
+			asked.push(hostname);
+			// Stands in for https://<machine>.<tailnet>.ts.net.
+			return server.origin;
+		},
+	});
+	context.after(() => client.dispose());
+	const count = server.requests.length;
+	await connected(client);
+	assert.deepEqual(asked, ["127.0.0.1"]);
+	const status = await client.getConnectionStatus();
+	assert.equal("connections" in status && status.connections[0]?.origin, server.origin);
+	assert.equal("connections" in status && status.connections[0]?.host, "127.0.0.1");
+	assert.equal((await client.getSnapshot()).summary.total, 1);
+	// The login went there only after the same environment answered.
+	assert.equal(server.requests[count]?.path, "/.well-known/t3/environment");
+	assert.equal(server.requests[count]?.authorization, undefined);
+	assert.equal(server.requests.filter((item) => item.path === "/oauth/token").length, 1);
+});
+
+test("the HTTPS address is not used when a different environment answers there", async (context) => {
+	const server = await fixture(context);
+	const store = new MemoryStore();
+	const first = new T3LiveClient({ store });
+	await first.pair(server.link);
+	await first.dispose();
+	const saved = store.values[0];
+	assert.ok(saved);
+	store.values = [{ ...saved, origin: "http://127.0.0.1:1", allowHttp: true, host: "devbox" }];
+	server.setIdentity("different");
+	const asked: string[] = [];
+	const client = new T3LiveClient({
+		store,
+		retryMs: 10,
+		httpsOrigin: async (hostname) => {
+			asked.push(hostname);
+			return server.origin;
+		},
+	});
+	context.after(() => client.dispose());
+	const count = server.requests.length;
+	await until(
+		client,
+		async () => asked.length > 0 && (await client.getConnectionStatus()).state === "offline",
+	);
+	const status = await client.getConnectionStatus();
+	assert.equal(asked[0], "devbox");
+	assert.equal("connections" in status && status.connections[0]?.origin, "http://127.0.0.1:1");
+	assert.ok(server.requests.slice(count).every((item) => !item.authorization));
+});

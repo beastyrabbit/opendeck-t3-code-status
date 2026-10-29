@@ -17,13 +17,13 @@ OpenDeck  ⇄  opendeck.ts  ⇄  controller.ts  ⇄  t3-live-client.ts  ⇄  T3 
 | `src/index.ts` | Entry point. Wires the OpenDeck host to the controller and the live client. |
 | `src/opendeck.ts` | The Stream Deck plugin protocol that OpenDeck speaks over WebSocket: launch arguments, events in, images and titles out. Bounds every value it keeps from the host. |
 | `src/controller.ts` | Tracks visible keys and open settings panels, renders on every status change, runs the blink animation, and handles settings-panel commands (`pair`, `pairSsh`, `discoverHosts`, `removeConnection`, `getConnectionStatus`). |
-| `src/t3-live-client.ts` | One WebSocket per paired environment. Pairs, reconnects with backoff, keeps each environment's threads in memory, and sums the per-environment counts into one snapshot. |
+| `src/t3-live-client.ts` | One WebSocket per paired environment. Pairs, reconnects with backoff (moving a plain-HTTP connection that stops answering to the machine's Tailscale HTTPS address once the same environment answers there), keeps each environment's threads in memory, and sums the per-environment counts into one snapshot. |
 | `src/t3-protocol.ts` | Parses T3's wire format: pairing links, origins, the environment descriptor, and thread shells. Keeps only the fields the keys need, never conversation or file data. |
 | `src/status.ts` | Classifies each thread and counts them into a `ThreadSummary`. |
 | `src/render.ts` | Draws every key type, theme, and connection state as SVG, and writes the accessible titles. |
 | `src/connection-store.ts` | Reads and writes `~/.config/opendeck-t3-code-status/connections.json` with owner-only permissions. |
 | `src/ssh-pairing.ts` | Creates read-only pairing tokens over SSH with a fixed remote command, including the Windows fallback. Reads SSH config aliases. |
-| `src/tailnet.ts` | **Find**: lists Tailscale peers and probes them for a T3 server. Decides when plain HTTP is safe and pins Tailscale pairings to their address. |
+| `src/tailnet.ts` | **Find**: lists Tailscale peers and probes them for a T3 server on port 3773 or at their Tailscale HTTPS address. Decides when plain HTTP is safe, pins Tailscale pairings to their address, and looks up the HTTPS address used when a plain-HTTP server stops answering. |
 | `src/types.ts` | Shared types, action UUIDs, display modes, themes, and settings normalization. |
 | `plugin/` | The static plugin: `manifest.json`, icons, and the settings panel (`property-inspector/`), plain JavaScript that talks to the controller through `sendToPlugin`. |
 | `scripts/` | Build, package, release verification, local deployment, the Linux setup, and the docs images. |

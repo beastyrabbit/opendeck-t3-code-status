@@ -3,10 +3,14 @@
 import { T3CodeController } from "./controller.js";
 import { OpenDeckHost } from "./opendeck.js";
 import { T3LiveClient } from "./t3-live-client.js";
+import { tailnetHttpsOrigin } from "./tailnet.js";
 
 export async function main(argumentsList = process.argv.slice(2)): Promise<void> {
 	const host = new OpenDeckHost(argumentsList);
-	const controller = new T3CodeController(host, new T3LiveClient());
+	const controller = new T3CodeController(
+		host,
+		new T3LiveClient({ httpsOrigin: (hostname) => tailnetHttpsOrigin(hostname) }),
+	);
 	host.onEvent((event) => controller.handle(event));
 
 	let stopping = false;

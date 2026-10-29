@@ -41,6 +41,8 @@ export interface LiveClientOptions {
 	now?: () => number;
 	retryMs?: number;
 	heartbeatMs?: number;
+	/** The HTTPS address of a machine whose plain-HTTP server stopped answering, by its name or address. */
+	httpsOrigin?: (hostname: string) => Promise<string | undefined>;
 }
 
 export class T3LiveClient {
@@ -293,12 +295,13 @@ export class T3LiveClient {
 		env.abort = new AbortController();
 		this.emit();
 		try {
+			const signal = env.abort.signal;
 			const descriptor = await this.request(
 				env.saved.origin,
 				"/.well-known/t3/environment",
 				{},
-				env.abort.signal,
-			);
+				signal,
+			).catch((error: unknown) => this.describeOverHttps(env, error, signal));
 			if (!current()) return;
 			if (!record(descriptor) || descriptor.environmentId !== env.saved.environmentId)
 				throw new LiveConnectionError("identity-mismatch");
@@ -395,6 +398,28 @@ export class T3LiveClient {
 		} catch (error) {
 			if (current()) this.fail(env, error instanceof LiveConnectionError ? error.code : "offline");
 		}
+	}
+	/**
+	 * Moves a connection whose plain-HTTP server does not answer to the machine's HTTPS address, when the
+	 * same environment answers there, and returns its descriptor. The token goes there only after that
+	 * check, and only over HTTPS. Rethrows `error` otherwise.
+	 */
+	private async describeOverHttps(env: Environment, error: unknown, signal: AbortSignal): Promise<unknown> {
+		const saved = env.saved;
+		const url = new URL(saved.origin);
+		if (!(error instanceof LiveConnectionError) || error.code !== "offline" || url.protocol !== "http:")
+			throw error;
+		const host = saved.host ?? url.hostname.replace(/^\[|\]$/g, "");
+		const origin = await this.options.httpsOrigin?.(host).catch(() => undefined);
+		if (!origin || signal.aborted) throw error;
+		const descriptor = await this.request(origin, "/.well-known/t3/environment", {}, signal).catch(() => {
+			throw error;
+		});
+		if (!record(descriptor) || descriptor.environmentId !== saved.environmentId || env.saved !== saved)
+			throw error;
+		// Kept in memory only: the saved file is written by pairing, and a re-pair saves the new address.
+		env.saved = { ...saved, origin, allowHttp: false, host };
+		return descriptor;
 	}
 	private apply(env: Environment, item: unknown): void {
 		if (!record(item)) throw new Error();

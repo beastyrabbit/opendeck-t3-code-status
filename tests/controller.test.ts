@@ -10,7 +10,7 @@ import {
 	type OpenDeckEvent,
 } from "../src/opendeck.js";
 import { renderKey } from "../src/render.js";
-import { LiveConnectionError } from "../src/t3-protocol.js";
+import { LiveConnectionError, parsePairingLink } from "../src/t3-protocol.js";
 import {
 	ACTION_UUID,
 	type ConnectionStatus,
@@ -900,6 +900,7 @@ test("SSH pairing pairs every host it can and reports each one without leaking t
 	const issued: string[] = [];
 	const controller = new T3CodeController(host, client, {
 		tailnetAddress: async () => undefined,
+		tailnetHttpsOrigin: async () => undefined,
 		issuePairingLink: async (target) => {
 			issued.push(target);
 			if (target === "mac") throw new LiveConnectionError("ssh-failed");
@@ -981,5 +982,49 @@ test("tailnet discovery reports found hosts, and tailnet hosts pair at their Tai
 			host: "anvil",
 		},
 	]);
+	await controller.dispose();
+});
+
+test("a host whose plain-HTTP server does not answer pairs at its Tailscale HTTPS address", async () => {
+	const host = new FakeHost();
+	const client = new FakeClient() as FakeClient & T3StatusClient;
+	const paired: Array<{ link: string; allowHttp: boolean; host?: string }> = [];
+	client.pair = async (link, allowHttp, host) => {
+		paired.push({ link, allowHttp, ...(host ? { host } : {}) });
+		if (parsePairingLink(link, true).origin.startsWith("http://")) throw new LiveConnectionError("offline");
+	};
+	const controller = new T3CodeController(host, client, {
+		tailnetAddress: async (hostname) => (hostname === "devbox" ? "100.97.1.1" : undefined),
+		tailnetHttpsOrigin: async (hostname) =>
+			["devbox", "kiln"].includes(hostname) ? `https://${hostname}.example.ts.net` : undefined,
+		issuePairingLink: async (target) => `http://${target}:3773/pair#token=fixture`,
+	});
+	controller.handle(event("sendToPlugin", "key-a", { command: "pairSsh", hosts: "devbox, kiln, anvil" }));
+	await new Promise((resolve) => setTimeout(resolve, 10));
+	assert.deepEqual(paired, [
+		{ link: "http://100.97.1.1:3773/pair#token=fixture", allowHttp: true, host: "devbox" },
+		{ link: "https://devbox.example.ts.net/pair#token=fixture", allowHttp: false, host: "devbox" },
+		{ link: "http://kiln:3773/pair#token=fixture", allowHttp: false },
+		{ link: "https://kiln.example.ts.net/pair#token=fixture", allowHttp: false, host: "kiln" },
+		{ link: "http://anvil:3773/pair#token=fixture", allowHttp: false },
+	]);
+	assert.deepEqual(host.inspectorMessages.at(-1)?.payload, {
+		type: "pairingResult",
+		hosts: [{ host: "devbox" }, { host: "kiln" }, { host: "anvil", error: "offline" }],
+	});
+
+	// A pasted link that names its server in the host parameter keeps that form.
+	controller.handle(
+		event("sendToPlugin", "key-a", {
+			command: "pair",
+			link: "https://app.t3.codes/pair?host=http%3A%2F%2Fkiln%3A3773#token=fixture",
+		}),
+	);
+	await new Promise((resolve) => setTimeout(resolve, 10));
+	assert.deepEqual(paired.at(-1), {
+		link: "https://app.t3.codes/pair?host=https%3A%2F%2Fkiln.example.ts.net#token=fixture",
+		allowHttp: false,
+		host: "kiln",
+	});
 	await controller.dispose();
 });

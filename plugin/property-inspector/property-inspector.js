@@ -541,7 +541,7 @@ function showDiscoveredHosts(value) {
 	);
 }
 
-/** Remote machines already paired over plain HTTP, as host or host:port. */
+/** Remote machines already paired over plain HTTP or through Tailscale, as host or host:port. */
 function pairedSshHosts(items) {
 	const hosts = new Set();
 	for (const item of items) {
@@ -551,7 +551,9 @@ function pairedSshHosts(items) {
 			const name = typeof item.host === "string" ? item.host.slice(0, 260) : url.hostname;
 			// Pair all takes host names and IPv4 addresses, not IPv6 literals.
 			const local = ["localhost", "127.0.0.1"].includes(name);
-			if (url.protocol !== "http:" || local || name.startsWith("[") || name.includes(":")) continue;
+			const tailscale = url.protocol === "https:" && typeof item.host === "string";
+			if ((url.protocol !== "http:" && !tailscale) || local || name.startsWith("[") || name.includes(":"))
+				continue;
 			hosts.add(url.port && url.port !== "3773" ? `${name}:${url.port}` : name);
 		} catch {
 			// Skip origins that are not URLs.
