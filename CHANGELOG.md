@@ -2,6 +2,10 @@
 
 All notable changes to T3 Code Status are recorded here.
 
+## 0.4.2
+
+- Machines whose T3 server answers only through Tailscale HTTPS stay on the keys. When a paired machine stops answering on `http://<host>:3773`, for example because its server restarted listening only on its own machine, the plugin reaches it at `https://<machine>.<tailnet>.ts.net` with the same login, once the same T3 environment answers there. **Pair all**, pasted links, and **Find** use that address too.
+
 ## 0.4.1
 
 - The Overview key's running cell now shows the actively working threads as its big number, next to the ⏸ count of those that only wait. The two add up to the running total instead of the waiting count reading as extra threads.

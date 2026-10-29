@@ -2,7 +2,7 @@
 	"Name": "T3 Code Status",
 	"Description": "Shows working T3 Code threads and the approvals, questions, plan reviews, failures, and usage limits that need you, across all connected environments.",
 	"Author": "BeastyRabbit",
-	"Version": "0.4.1.0",
+	"Version": "0.4.2.0",
 	"UUID": "com.beastyrabbit.t3-code-status",
 	"URL": "https://github.com/beastyrabbit/opendeck-t3-code-status",
 	"CodePath": "bin/plugin.cjs",
