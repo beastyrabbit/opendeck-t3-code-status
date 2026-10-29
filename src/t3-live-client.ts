@@ -417,7 +417,7 @@ export class T3LiveClient {
 		});
 		if (!record(descriptor) || descriptor.environmentId !== saved.environmentId || env.saved !== saved)
 			throw error;
-		// Kept in memory only: the saved file is written by pairing, and a re-pair saves the new address.
+		// Not written here: the next pairing or removal saves every connection, this address included.
 		env.saved = { ...saved, origin, allowHttp: false, host };
 		return descriptor;
 	}
