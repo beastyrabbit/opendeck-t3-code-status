@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { LiveConnectionError, record, textValue } from "./t3-protocol.js";
 
 const T3_PORT = 3773;
@@ -70,19 +70,40 @@ export async function issuePairingLink(
 /**
  * Creates a short-lived read-only pairing token with this computer's own `t3` and returns it as a
  * pairing link for the local T3 server at `origin`. No SSH is involved, because Tailscale does not
- * list the machine it runs on. POSIX shells only; the token is never logged or shown.
+ * list the machine it runs on. The token is minted only when the local T3 data belongs to
+ * `environmentId`, so a loopback address that forwards to another machine never receives it.
+ * POSIX shells only; the token is never logged or shown.
  */
 export async function issueLocalPairingLink(
 	origin: string,
+	environmentId: string,
 	run: CommandRunner = runCommand,
+	home: string = localT3Home(),
+	readFileText: (path: string) => Promise<string> = (path) => readFile(path, "utf8"),
 ): Promise<string> {
-	const result = await run("sh", ["-c", REMOTE_COMMAND]);
+	// t3 trims its --base-dir, so a folder with surrounding spaces would not be the one checked.
+	if (home !== home.trim()) throw new LiveConnectionError("t3-failed");
+	const local = (await readFileText(join(home, "userdata", "environment-id")).catch(() => undefined))?.trim();
+	if (!local) throw new LiveConnectionError("t3-failed");
+	if (local !== environmentId) throw new LiveConnectionError("identity-mismatch");
+	// The checked folder is passed as "$1", so t3 issues the token for exactly that data.
+	const result = await run("sh", ["-c", `${REMOTE_COMMAND} --base-dir "$1"`, "sh", home]);
 	const credential = issuedCredential(result);
 	if (credential === undefined)
 		throw new LiveConnectionError(result.code === 127 ? "t3-missing" : "t3-failed");
 	const link = new URL("/pair", origin);
 	link.hash = new URLSearchParams({ token: credential }).toString();
 	return link.toString();
+}
+
+/**
+ * This computer's T3 data folder, resolved the way T3 resolves `T3CODE_HOME`. It is absolute, so t3
+ * cannot expand the `--base-dir` it receives into a different folder than the one checked.
+ */
+export function localT3Home(value = process.env.T3CODE_HOME?.trim()): string {
+	if (!value) return resolve(homedir(), ".t3");
+	if (value === "~") return resolve(homedir());
+	return resolve(/^~[/\\]/.test(value) ? join(homedir(), value.slice(2)) : value);
 }
 
 function issuedCredential(result: CommandResult): string | undefined {

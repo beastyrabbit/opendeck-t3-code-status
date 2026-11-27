@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
 
 import {
 	type CommandResult,
 	issueLocalPairingLink,
 	issuePairingLink,
+	localT3Home,
 	parseSshHosts,
 	readSshConfigAliases,
 } from "../src/ssh-pairing.js";
@@ -98,21 +99,71 @@ test("machines without a t3 command get the Windows app's CLI as a second try", 
 
 test("this computer's own pairing link comes from the same t3 command run locally, without ssh", async () => {
 	const { calls, run } = runner({ code: 0, stdout: JSON.stringify({ id: "1", credential: "fixture" }) });
+	const local = async (path: string) => {
+		assert.equal(path, join("/data/t3", "userdata", "environment-id"));
+		return "env-local\n";
+	};
 	assert.equal(
-		await issueLocalPairingLink("http://127.0.0.1:3773", run),
+		await issueLocalPairingLink("http://127.0.0.1:3773", "env-local", run, "/data/t3", local),
 		"http://127.0.0.1:3773/pair#token=fixture",
 	);
 	assert.equal(calls[0]?.command, "sh");
 	assert.equal(calls[0]?.args[0], "-c");
-	assert.match(calls[0]?.args[1] ?? "", /auth pairing create --scope orchestration:read --ttl 5m .*--json$/);
+	// The checked data folder reaches t3 as a positional argument, never inside the command text.
+	assert.match(
+		calls[0]?.args[1] ?? "",
+		/auth pairing create --scope orchestration:read --ttl 5m .*--json --base-dir "\$1"$/,
+	);
+	assert.deepEqual(calls[0]?.args.slice(2), ["sh", "/data/t3"]);
 	await assert.rejects(
-		issueLocalPairingLink("http://127.0.0.1:3773", runner({ code: 127, stdout: "" }).run),
+		issueLocalPairingLink(
+			"http://127.0.0.1:3773",
+			"env-local",
+			runner({ code: 127, stdout: "" }).run,
+			"/data/t3",
+			local,
+		),
 		rejectsWith("t3-missing"),
 	);
 	await assert.rejects(
-		issueLocalPairingLink("http://127.0.0.1:3773", runner({ code: 0, stdout: "{}" }).run),
+		issueLocalPairingLink(
+			"http://127.0.0.1:3773",
+			"env-local",
+			runner({ code: 0, stdout: "{}" }).run,
+			"/data/t3",
+			local,
+		),
 		rejectsWith("t3-failed"),
 	);
+	// A loopback address that forwards to another machine's T3 never gets a token minted for this one.
+	const forwarded = runner({ code: 0, stdout: JSON.stringify({ id: "1", credential: "fixture" }) });
+	await assert.rejects(
+		issueLocalPairingLink("http://127.0.0.1:3773", "env-remote", forwarded.run, "/data/t3", local),
+		rejectsWith("identity-mismatch"),
+	);
+	assert.equal(forwarded.calls.length, 0);
+	// t3 trims its --base-dir, so a folder with surrounding spaces is never used.
+	await assert.rejects(
+		issueLocalPairingLink("http://127.0.0.1:3773", "env-local", forwarded.run, "/tmp/profile ", local),
+		rejectsWith("t3-failed"),
+	);
+	assert.equal(forwarded.calls.length, 0);
+	await assert.rejects(
+		issueLocalPairingLink("http://127.0.0.1:3773", "env-local", forwarded.run, "/data/t3", async () => {
+			throw new Error("ENOENT");
+		}),
+		rejectsWith("t3-failed"),
+	);
+	assert.equal(forwarded.calls.length, 0);
+});
+
+test("the local T3 data folder follows T3CODE_HOME and is always absolute", () => {
+	assert.equal(localT3Home(""), join(homedir(), ".t3"));
+	assert.equal(localT3Home("~"), homedir());
+	assert.equal(localT3Home("~/alt"), join(homedir(), "alt"));
+	assert.equal(localT3Home("~\\alt"), join(homedir(), "alt"));
+	assert.equal(localT3Home("/data/t3"), resolve("/data/t3"));
+	assert.equal(localT3Home("rel/t3"), resolve("rel/t3"));
 });
 
 test("ssh and t3 failures map to codes the settings panel explains", async () => {
