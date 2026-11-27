@@ -173,7 +173,8 @@ function bindControls() {
 	});
 	elements.sshPairButton.addEventListener("click", () => {
 		const hosts = elements.sshHosts.value.trim();
-		if (!hosts || authBusy) return;
+		// With no hosts, Pair all still renews a T3 server paired on this computer.
+		if ((!hosts && !connections.some((item) => isLoopbackOrigin(item.origin))) || authBusy) return;
 		if (sendToPlugin({ command: "pairSsh", hosts, allowHttp: elements.allowHttp.checked })) {
 			authBusy = true;
 			setSettingsEnabled(socketReady);
@@ -278,7 +279,7 @@ function sendSocketMessage(message) {
 
 function describePairingResult(payload) {
 	if (payload.error) return localizeRuntimeError(payload.error);
-	if (Array.isArray(payload.hosts)) return describeSshResults(payload.hosts.slice(0, 16));
+	if (Array.isArray(payload.hosts)) return describeSshResults(payload.hosts.slice(0, 32));
 	return "Connection settings saved.";
 }
 
@@ -477,10 +478,13 @@ function normalizeConnectionStatus(status) {
 }
 
 function connectedDetail(status) {
-	// Machines that are offline or still connecting are left out of the counts.
+	// Machines that are offline, still connecting, or need pairing again are left out of the counts.
 	const missing = connections
 		.filter((item) => item.state !== "connected")
-		.map((item) => String(item.label).slice(0, 80));
+		.map(
+			(item) =>
+				String(item.label).slice(0, 80) + (item.state === "authorization-required" ? " (re-pair)" : ""),
+		);
 	if (missing.length > 0) {
 		const live = status.environments - missing.length;
 		return `${live} of ${status.environments} Environments live · not counted: ${missing.join(", ")}`;
@@ -542,6 +546,14 @@ function showDiscoveredHosts(value) {
 }
 
 /** Remote machines already paired over plain HTTP or through Tailscale, as host or host:port. */
+function isLoopbackOrigin(origin) {
+	try {
+		return ["localhost", "127.0.0.1", "[::1]"].includes(new URL(origin).hostname);
+	} catch {
+		return false;
+	}
+}
+
 function pairedSshHosts(items) {
 	const hosts = new Set();
 	for (const item of items) {

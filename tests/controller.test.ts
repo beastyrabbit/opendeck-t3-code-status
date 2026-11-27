@@ -929,6 +929,62 @@ test("SSH pairing pairs every host it can and reports each one without leaking t
 	await controller.dispose();
 });
 
+test("SSH pairing also renews environments on this computer, which Tailscale never lists", async () => {
+	const host = new FakeHost();
+	const client = new FakeClient() as FakeClient & T3StatusClient;
+	const environment = (label: string, origin: string) => ({
+		environmentId: label,
+		label,
+		origin,
+		expiresAt: 0,
+		state: "authorization-required" as const,
+	});
+	client.onGetConnectionStatus = async () => ({
+		state: "authorization-required",
+		connections: [
+			environment("bunux", "http://127.0.0.1:3773"),
+			environment("kiln", "http://100.121.1.1:3773"),
+		],
+	});
+	const paired: Array<{ link: string; allowHttp: boolean; host?: string; environmentId?: string }> = [];
+	client.pair = async (link, allowHttp, host, environmentId) => {
+		paired.push({ link, allowHttp, ...(host ? { host } : {}), ...(environmentId ? { environmentId } : {}) });
+	};
+	const local: string[] = [];
+	const controller = new T3CodeController(host, client, {
+		tailnetAddress: async (hostname) => (hostname === "kiln" ? "100.121.1.1" : undefined),
+		tailnetHttpsOrigin: async () => undefined,
+		issuePairingLink: async (target) => `http://${target}:3773/pair#token=fixture-${target}`,
+		issueLocalPairingLink: async (origin) => {
+			local.push(origin);
+			return `${origin}/pair#token=fixture-local`;
+		},
+	});
+	controller.handle(event("sendToPlugin", "key-a", { command: "pairSsh", hosts: "kiln" }));
+	await new Promise((resolve) => setTimeout(resolve, 10));
+	assert.deepEqual(local, ["http://127.0.0.1:3773"]);
+	assert.deepEqual(paired, [
+		{ link: "http://100.121.1.1:3773/pair#token=fixture-kiln", allowHttp: true, host: "kiln" },
+		// Only the environment being renewed may receive the token.
+		{ link: "http://127.0.0.1:3773/pair#token=fixture-local", allowHttp: false, environmentId: "bunux" },
+	]);
+	assert.deepEqual(host.inspectorMessages.findLast((message) => message.context === "key-a")?.payload, {
+		type: "pairingResult",
+		hosts: [{ host: "kiln" }, { host: "bunux" }],
+	});
+	assert.doesNotMatch(JSON.stringify(host.inspectorMessages), /fixture/);
+
+	// With no hosts listed, the local environment is still renewed.
+	controller.handle(event("sendToPlugin", "key-a", { command: "pairSsh", hosts: " " }));
+	await new Promise((resolve) => setTimeout(resolve, 10));
+	assert.equal(paired.length, 3);
+	assert.deepEqual(host.inspectorMessages.findLast((message) => message.context === "key-a")?.payload, {
+		type: "pairingResult",
+		hosts: [{ host: "bunux" }],
+	});
+	await controller.dispose();
+});
+
 test("tailnet discovery reports found hosts, and tailnet hosts pair at their Tailscale address without the opt-in", async () => {
 	const host = new FakeHost();
 	const client = new FakeClient() as FakeClient & T3StatusClient;

@@ -2,6 +2,11 @@
 
 All notable changes to T3 Code Status are recorded here.
 
+## Unreleased
+
+- One machine whose authorization expired no longer turns every key into **RE-PAIR**. Like an offline machine, it is left out of the counts and the settings panel names it with **(re-pair)**. The keys show **RE-PAIR** only when no paired machine is connected.
+- **Pair all** also renews the T3 server on the machine that runs OpenDeck when it is paired at `127.0.0.1` or `localhost`. Tailscale does not list that machine, so it could not be renewed over SSH before. Not available on Windows.
+
 ## 0.4.2
 
 - Machines whose T3 server answers only through Tailscale HTTPS stay on the keys. When a paired machine stops answering on `http://<host>:3773`, for example because its server restarted listening only on its own machine, the plugin reaches it at `https://<machine>.<tailnet>.ts.net` with the same login, once the same T3 environment answers there. **Pair all**, pasted links, and **Find** use that address too.

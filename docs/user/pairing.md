@@ -39,9 +39,9 @@ If the machine that runs OpenDeck can already SSH into your other machines witho
 
 ## Renewing and removing pairings
 
-T3 authorizations expire after about 30 days, and the plugin cannot renew them on its own. A connected stream may stay open past that date because T3 checks authorization only when a connection opens; the next reconnect then shows **RE-PAIR**.
+T3 authorizations expire after about 30 days, and the plugin cannot renew them on its own. A connected stream may stay open past that date because T3 checks authorization only when a connection opens. After that, the machine drops out of the counts and the settings panel lists it with **(re-pair)**; the keys show **RE-PAIR** only once no paired machine is left connected.
 
-- For machines paired over SSH, select **Pair all** again. The list keeps every machine that is already paired, so one press renews them all.
+- For machines paired over SSH, select **Pair all** again. The list keeps every machine that is already paired, so one press renews them all. It also renews a T3 server on the machine that runs OpenDeck, paired at `127.0.0.1` or `localhost`, by running the same `t3` command there without SSH. Tailscale never lists its own machine, so **Find** cannot add it. This local renewal is not available on Windows.
 - For machines paired by hand, create a fresh read-only link in that machine's T3 Code app and paste it into **Pair an environment**.
 
 **Forget selected environment** removes the saved credential from the plugin. To remove the server's authorization too, revoke the session in **T3 Settings → Connections** on that machine.

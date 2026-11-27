@@ -6,6 +6,7 @@ import { test } from "node:test";
 
 import {
 	type CommandResult,
+	issueLocalPairingLink,
 	issuePairingLink,
 	parseSshHosts,
 	readSshConfigAliases,
@@ -46,7 +47,7 @@ test("the pairing link comes from a fixed read-only t3 command and points at the
 	assert.match(remote, /\$HOME\/\.t3\/runtime\/service-state\.json/);
 	assert.match(
 		remote,
-		/PATH="\$PATH:\$HOME\/\.local\/bin:\$HOME\/\.t3\/bin" "\$t3" auth pairing create --scope orchestration:read --ttl 5m .*--json$/,
+		/PATH="\$PATH:\$HOME\/\.local\/bin:\$HOME\/\.t3\/bin" exec "\$t3" auth pairing create --scope orchestration:read --ttl 5m .*--json$/,
 	);
 	assert.ok(args.includes("BatchMode=yes"));
 	assert.equal(
@@ -92,6 +93,25 @@ test("machines without a t3 command get the Windows app's CLI as a second try", 
 	assert.match(
 		commands[1] ?? "",
 		/^set ELECTRON_RUN_AS_NODE=1&& ".*T3 Code \(Beta\)\.exe" ".*bin\.mjs" auth pairing create --scope orchestration:read /,
+	);
+});
+
+test("this computer's own pairing link comes from the same t3 command run locally, without ssh", async () => {
+	const { calls, run } = runner({ code: 0, stdout: JSON.stringify({ id: "1", credential: "fixture" }) });
+	assert.equal(
+		await issueLocalPairingLink("http://127.0.0.1:3773", run),
+		"http://127.0.0.1:3773/pair#token=fixture",
+	);
+	assert.equal(calls[0]?.command, "sh");
+	assert.equal(calls[0]?.args[0], "-c");
+	assert.match(calls[0]?.args[1] ?? "", /auth pairing create --scope orchestration:read --ttl 5m .*--json$/);
+	await assert.rejects(
+		issueLocalPairingLink("http://127.0.0.1:3773", runner({ code: 127, stdout: "" }).run),
+		rejectsWith("t3-missing"),
+	);
+	await assert.rejects(
+		issueLocalPairingLink("http://127.0.0.1:3773", runner({ code: 0, stdout: "{}" }).run),
+		rejectsWith("t3-failed"),
 	);
 });
 

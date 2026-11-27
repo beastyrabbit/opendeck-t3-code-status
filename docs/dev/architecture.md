@@ -36,7 +36,7 @@ For each paired environment, `T3LiveClient`:
 2. On every connect, checks the environment descriptor again (identity and orchestration protocol 2), gets a ticket from `/api/auth/websocket-ticket`, and opens `/ws` with that ticket.
 3. Subscribes to `orchestration.subscribeShell`, loads the full snapshot, then applies `thread.updated` and `thread.removed` events.
 
-Environments that are offline are left out of the counts instead of blanking every key. Only when none is connected do the keys show **OFF**, **RE-PAIR**, or **VERSION**. Change notifications are batched for 50 ms, and a 30-second clock re-evaluates snoozes without network traffic.
+Environments that are offline or whose authorization expired are left out of the counts instead of blanking every key. Only when none is connected do the keys show **OFF**, **RE-PAIR**, or **VERSION**. Change notifications are batched for 50 ms, and a 30-second clock re-evaluates snoozes without network traffic.
 
 ## Counting rules
 

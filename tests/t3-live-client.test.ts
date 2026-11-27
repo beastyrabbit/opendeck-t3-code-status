@@ -400,6 +400,18 @@ test("identity mismatch never sends bearer credentials and revoked sessions requ
 	await until(client, async () => (await client.getConnectionStatus()).state === "authorization-required");
 });
 
+test("renewing an environment refuses a different one at its address before sending the token", async (context) => {
+	const server = await fixture(context);
+	const client = new T3LiveClient({ store: new MemoryStore(), retryMs: 10 });
+	context.after(() => client.dispose());
+	await assert.rejects(client.pair(server.link, false, undefined, "env-other"), {
+		code: "identity-mismatch",
+	});
+	assert.ok(server.requests.every((item) => item.path !== "/oauth/token"));
+	await client.pair(server.link, false, undefined, "env-1");
+	await connected(client);
+});
+
 test("restore credentials across plugin restarts and reject excessive scopes without replacing existing connection", async (context) => {
 	const server = await fixture(context);
 	const store = new MemoryStore();
@@ -489,15 +501,28 @@ test("multiple environments aggregate independently and unreachable environments
 	});
 	assert.equal((await client.getConnectionStatus()).state, "connected");
 	assert.equal((await client.getSnapshot()).summary.total, 1);
-	// An expired authorization still asks for re-pairing, because only the user can fix it.
+	// An expired authorization on one machine leaves it out too, instead of hiding the others' counts.
 	b.setProtocolVersion(2);
 	b.setRejected(true);
+	await until(client, async () => {
+		const status = await client.getConnectionStatus();
+		return (
+			"connections" in status && status.connections.some((env) => env.state === "authorization-required")
+		);
+	});
+	assert.equal((await client.getConnectionStatus()).state, "connected");
+	assert.equal((await client.getSnapshot()).summary.total, 1);
+	// Once no machine is left connected, the key asks for re-pairing, because only the user can fix it.
+	a.setRejected(true);
+	firstSocket(a.sockets).terminate();
 	await until(client, async () => (await client.getConnectionStatus()).state === "authorization-required");
 	await assert.rejects(client.getSnapshot(), { code: "authorization-required" });
+	a.setRejected(false);
 	await client.remove("env-2");
+	await client.pair(a.link);
 	await connected(client);
 	assert.equal((await client.getSnapshot()).summary.total, 1);
-	assert.equal(a.subscriptions.length, 1);
+	assert.equal(a.subscriptions.length, 2);
 });
 
 test("malformed stream data drops stale state and reconnects with a complete snapshot", async (context) => {

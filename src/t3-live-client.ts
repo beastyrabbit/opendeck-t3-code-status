@@ -104,7 +104,7 @@ export class T3LiveClient {
 		this.environments.set(saved.environmentId, env);
 		void this.connect(env);
 	}
-	async pair(link: string, allowHttp = false, host?: string): Promise<void> {
+	async pair(link: string, allowHttp = false, host?: string, environmentId?: string): Promise<void> {
 		await this.ready;
 		if (this.busy) throw new LiveConnectionError("busy");
 		if (this.disposed) return;
@@ -115,6 +115,8 @@ export class T3LiveClient {
 			const descriptor = await this.request(target.origin, "/.well-known/t3/environment");
 			if (!record(descriptor) || !textValue(descriptor.environmentId))
 				throw new LiveConnectionError("invalid-response");
+			if (environmentId !== undefined && descriptor.environmentId !== environmentId)
+				throw new LiveConnectionError("identity-mismatch");
 			assertSupportedProtocol(descriptor);
 			if (!this.environments.has(descriptor.environmentId) && this.environments.size >= MAX_ENVIRONMENTS)
 				throw new LiveConnectionError("invalid-response");
@@ -537,11 +539,14 @@ export class T3LiveClient {
 	}
 }
 
-/** One state for all environments. Unreachable ones are left out of the counts instead of blanking the key. */
+/**
+ * One state for all environments. Unreachable and expired ones are left out of the counts instead of
+ * blanking the key; the settings name them.
+ */
 function overallState(connections: EnvironmentStatus[]): Exclude<ConnectionStatus["state"], "error"> {
 	if (connections.length === 0) return "pairing-required";
-	if (connections.some((env) => env.state === "authorization-required")) return "authorization-required";
 	if (connections.some((env) => env.state === "connected")) return "connected";
+	if (connections.some((env) => env.state === "authorization-required")) return "authorization-required";
 	return connections.some((env) => env.state === "connecting") ? "connecting" : "offline";
 }
 
