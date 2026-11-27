@@ -48,7 +48,7 @@ export interface T3CodeControllerOptions {
 	 * Creates a read-only pairing link for a T3 server on this computer, at its loopback origin; the
 	 * local `t3` by default, none on Windows.
 	 */
-	issueLocalPairingLink?: (origin: string) => Promise<string>;
+	issueLocalPairingLink?: (origin: string, environmentId: string) => Promise<string>;
 	/** Lists hosts that run T3; Tailscale peers by default. */
 	discoverHosts?: () => Promise<string[]>;
 	/** The address that makes plain HTTP to a host safe without the user's opt-in: its Tailscale address by default. */
@@ -81,7 +81,7 @@ interface ConnectionStatusMessage {
 export class T3CodeController {
 	private readonly animationIntervalMs: number;
 	private readonly issuePairingLink: (host: string) => Promise<string>;
-	private readonly issueLocalPairingLink?: (origin: string) => Promise<string>;
+	private readonly issueLocalPairingLink?: (origin: string, environmentId: string) => Promise<string>;
 	private readonly discoverHosts: () => Promise<string[]>;
 	private readonly tailnetAddress: (hostname: string) => Promise<string | undefined>;
 	private readonly tailnetHttpsOrigin: (hostname: string) => Promise<string | undefined>;
@@ -119,7 +119,9 @@ export class T3CodeController {
 		this.issuePairingLink = options.issuePairingLink ?? sshPairingIssuer();
 		this.issueLocalPairingLink =
 			options.issueLocalPairingLink ??
-			(process.platform === "win32" ? undefined : (origin) => issueLocalPairingLink(origin));
+			(process.platform === "win32"
+				? undefined
+				: (origin, environmentId) => issueLocalPairingLink(origin, environmentId));
 		this.discoverHosts = options.discoverHosts ?? (() => discoverTailnetHosts());
 		this.tailnetAddress = options.tailnetAddress ?? ((hostname) => tailnetAddress(hostname));
 		this.tailnetHttpsOrigin = options.tailnetHttpsOrigin ?? ((hostname) => tailnetHttpsOrigin(hostname));
@@ -569,7 +571,7 @@ export class T3CodeController {
 		const hosts = list.trim() === "" && local.length > 0 ? [] : parseSshHosts(list);
 		const [links, localLinks] = await Promise.all([
 			Promise.allSettled(hosts.map((host) => this.issuePairingLink(host))),
-			Promise.allSettled(local.map((env) => env.issue(env.origin))),
+			Promise.allSettled(local.map((env) => env.issue(env.origin, env.environmentId))),
 		]);
 		const results: { host: string; error?: string }[] = [];
 		const jobs = [
@@ -604,7 +606,7 @@ export class T3CodeController {
 			environmentId: string;
 			label: string;
 			origin: string;
-			issue: (origin: string) => Promise<string>;
+			issue: (origin: string, environmentId: string) => Promise<string>;
 		}>
 	> {
 		const issue = this.issueLocalPairingLink;

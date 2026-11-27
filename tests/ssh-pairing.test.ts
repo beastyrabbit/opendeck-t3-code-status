@@ -98,21 +98,36 @@ test("machines without a t3 command get the Windows app's CLI as a second try", 
 
 test("this computer's own pairing link comes from the same t3 command run locally, without ssh", async () => {
 	const { calls, run } = runner({ code: 0, stdout: JSON.stringify({ id: "1", credential: "fixture" }) });
+	const local = async () => "env-local\n";
 	assert.equal(
-		await issueLocalPairingLink("http://127.0.0.1:3773", run),
+		await issueLocalPairingLink("http://127.0.0.1:3773", "env-local", run, local),
 		"http://127.0.0.1:3773/pair#token=fixture",
 	);
 	assert.equal(calls[0]?.command, "sh");
 	assert.equal(calls[0]?.args[0], "-c");
 	assert.match(calls[0]?.args[1] ?? "", /auth pairing create --scope orchestration:read --ttl 5m .*--json$/);
 	await assert.rejects(
-		issueLocalPairingLink("http://127.0.0.1:3773", runner({ code: 127, stdout: "" }).run),
+		issueLocalPairingLink("http://127.0.0.1:3773", "env-local", runner({ code: 127, stdout: "" }).run, local),
 		rejectsWith("t3-missing"),
 	);
 	await assert.rejects(
-		issueLocalPairingLink("http://127.0.0.1:3773", runner({ code: 0, stdout: "{}" }).run),
+		issueLocalPairingLink("http://127.0.0.1:3773", "env-local", runner({ code: 0, stdout: "{}" }).run, local),
 		rejectsWith("t3-failed"),
 	);
+	// A loopback address that forwards to another machine's T3 never gets a token minted for this one.
+	const forwarded = runner({ code: 0, stdout: JSON.stringify({ id: "1", credential: "fixture" }) });
+	await assert.rejects(
+		issueLocalPairingLink("http://127.0.0.1:3773", "env-remote", forwarded.run, local),
+		rejectsWith("identity-mismatch"),
+	);
+	assert.equal(forwarded.calls.length, 0);
+	await assert.rejects(
+		issueLocalPairingLink("http://127.0.0.1:3773", "env-local", forwarded.run, async () => {
+			throw new Error("ENOENT");
+		}),
+		rejectsWith("t3-failed"),
+	);
+	assert.equal(forwarded.calls.length, 0);
 });
 
 test("ssh and t3 failures map to codes the settings panel explains", async () => {

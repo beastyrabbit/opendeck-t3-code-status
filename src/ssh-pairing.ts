@@ -70,12 +70,19 @@ export async function issuePairingLink(
 /**
  * Creates a short-lived read-only pairing token with this computer's own `t3` and returns it as a
  * pairing link for the local T3 server at `origin`. No SSH is involved, because Tailscale does not
- * list the machine it runs on. POSIX shells only; the token is never logged or shown.
+ * list the machine it runs on. The token is minted only when the local T3 data belongs to
+ * `environmentId`, so a loopback address that forwards to another machine never receives it.
+ * POSIX shells only; the token is never logged or shown.
  */
 export async function issueLocalPairingLink(
 	origin: string,
+	environmentId: string,
 	run: CommandRunner = runCommand,
+	readEnvironmentId: () => Promise<string> = readLocalEnvironmentId,
 ): Promise<string> {
+	const local = (await readEnvironmentId().catch(() => undefined))?.trim();
+	if (!local) throw new LiveConnectionError("t3-failed");
+	if (local !== environmentId) throw new LiveConnectionError("identity-mismatch");
 	const result = await run("sh", ["-c", REMOTE_COMMAND]);
 	const credential = issuedCredential(result);
 	if (credential === undefined)
@@ -83,6 +90,12 @@ export async function issueLocalPairingLink(
 	const link = new URL("/pair", origin);
 	link.hash = new URLSearchParams({ token: credential }).toString();
 	return link.toString();
+}
+
+/** The environment ID of this computer's T3 data, which its `t3` command issues tokens for. */
+async function readLocalEnvironmentId(): Promise<string> {
+	const home = process.env.T3CODE_HOME || join(homedir(), ".t3");
+	return readFile(join(home, "userdata", "environment-id"), "utf8");
 }
 
 function issuedCredential(result: CommandResult): string | undefined {

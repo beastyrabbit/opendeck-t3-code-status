@@ -955,14 +955,14 @@ test("SSH pairing also renews environments on this computer, which Tailscale nev
 		tailnetAddress: async (hostname) => (hostname === "kiln" ? "100.121.1.1" : undefined),
 		tailnetHttpsOrigin: async () => undefined,
 		issuePairingLink: async (target) => `http://${target}:3773/pair#token=fixture-${target}`,
-		issueLocalPairingLink: async (origin) => {
-			local.push(origin);
+		issueLocalPairingLink: async (origin, environmentId) => {
+			local.push(`${environmentId}@${origin}`);
 			return `${origin}/pair#token=fixture-local`;
 		},
 	});
 	controller.handle(event("sendToPlugin", "key-a", { command: "pairSsh", hosts: "kiln" }));
 	await new Promise((resolve) => setTimeout(resolve, 10));
-	assert.deepEqual(local, ["http://127.0.0.1:3773"]);
+	assert.deepEqual(local, ["bunux@http://127.0.0.1:3773"]);
 	assert.deepEqual(paired, [
 		{ link: "http://100.121.1.1:3773/pair#token=fixture-kiln", allowHttp: true, host: "kiln" },
 		// Only the environment being renewed may receive the token.
