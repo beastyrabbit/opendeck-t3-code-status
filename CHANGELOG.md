@@ -2,7 +2,7 @@
 
 All notable changes to T3 Code Status are recorded here.
 
-## Unreleased
+## 0.4.3
 
 - One machine whose authorization expired no longer turns every key into **RE-PAIR**. Like an offline machine, it is left out of the counts and the settings panel names it with **(re-pair)**. The keys show **RE-PAIR** only when no paired machine is connected.
 - **Pair all** also renews the T3 server on the machine that runs OpenDeck when it is paired at `127.0.0.1` or `localhost`. Tailscale does not list that machine, so it could not be renewed over SSH before. Not available on Windows.
