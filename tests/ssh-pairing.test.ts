@@ -142,6 +142,12 @@ test("this computer's own pairing link comes from the same t3 command run locall
 		rejectsWith("identity-mismatch"),
 	);
 	assert.equal(forwarded.calls.length, 0);
+	// t3 trims its --base-dir, so a folder with surrounding spaces is never used.
+	await assert.rejects(
+		issueLocalPairingLink("http://127.0.0.1:3773", "env-local", forwarded.run, "/tmp/profile ", local),
+		rejectsWith("t3-failed"),
+	);
+	assert.equal(forwarded.calls.length, 0);
 	await assert.rejects(
 		issueLocalPairingLink("http://127.0.0.1:3773", "env-local", forwarded.run, "/data/t3", async () => {
 			throw new Error("ENOENT");
@@ -152,7 +158,7 @@ test("this computer's own pairing link comes from the same t3 command run locall
 });
 
 test("the local T3 data folder follows T3CODE_HOME and is always absolute", () => {
-	assert.equal(localT3Home(undefined), join(homedir(), ".t3"));
+	assert.equal(localT3Home(""), join(homedir(), ".t3"));
 	assert.equal(localT3Home("~"), homedir());
 	assert.equal(localT3Home("~/alt"), join(homedir(), "alt"));
 	assert.equal(localT3Home("~\\alt"), join(homedir(), "alt"));

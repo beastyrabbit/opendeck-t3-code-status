@@ -81,6 +81,8 @@ export async function issueLocalPairingLink(
 	home: string = localT3Home(),
 	readFileText: (path: string) => Promise<string> = (path) => readFile(path, "utf8"),
 ): Promise<string> {
+	// t3 trims its --base-dir, so a folder with surrounding spaces would not be the one checked.
+	if (home !== home.trim()) throw new LiveConnectionError("t3-failed");
 	const local = (await readFileText(join(home, "userdata", "environment-id")).catch(() => undefined))?.trim();
 	if (!local) throw new LiveConnectionError("t3-failed");
 	if (local !== environmentId) throw new LiveConnectionError("identity-mismatch");
@@ -99,8 +101,8 @@ export async function issueLocalPairingLink(
  * cannot expand the `--base-dir` it receives into a different folder than the one checked.
  */
 export function localT3Home(value = process.env.T3CODE_HOME?.trim()): string {
-	if (!value) return join(homedir(), ".t3");
-	if (value === "~") return homedir();
+	if (!value) return resolve(homedir(), ".t3");
+	if (value === "~") return resolve(homedir());
 	return resolve(/^~[/\\]/.test(value) ? join(homedir(), value.slice(2)) : value);
 }
 
