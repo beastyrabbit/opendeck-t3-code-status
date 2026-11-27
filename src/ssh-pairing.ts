@@ -78,12 +78,14 @@ export async function issueLocalPairingLink(
 	origin: string,
 	environmentId: string,
 	run: CommandRunner = runCommand,
-	readEnvironmentId: () => Promise<string> = readLocalEnvironmentId,
+	home: string = localT3Home(),
+	readFileText: (path: string) => Promise<string> = (path) => readFile(path, "utf8"),
 ): Promise<string> {
-	const local = (await readEnvironmentId().catch(() => undefined))?.trim();
+	const local = (await readFileText(join(home, "userdata", "environment-id")).catch(() => undefined))?.trim();
 	if (!local) throw new LiveConnectionError("t3-failed");
 	if (local !== environmentId) throw new LiveConnectionError("identity-mismatch");
-	const result = await run("sh", ["-c", REMOTE_COMMAND]);
+	// The checked folder is passed as "$1", so t3 issues the token for exactly that data.
+	const result = await run("sh", ["-c", `${REMOTE_COMMAND} --base-dir "$1"`, "sh", home]);
 	const credential = issuedCredential(result);
 	if (credential === undefined)
 		throw new LiveConnectionError(result.code === 127 ? "t3-missing" : "t3-failed");
@@ -92,10 +94,12 @@ export async function issueLocalPairingLink(
 	return link.toString();
 }
 
-/** The environment ID of this computer's T3 data, which its `t3` command issues tokens for. */
-async function readLocalEnvironmentId(): Promise<string> {
-	const home = process.env.T3CODE_HOME || join(homedir(), ".t3");
-	return readFile(join(home, "userdata", "environment-id"), "utf8");
+/** This computer's T3 data folder, resolved the way T3 resolves `T3CODE_HOME`. */
+function localT3Home(): string {
+	const value = process.env.T3CODE_HOME?.trim();
+	if (!value) return join(homedir(), ".t3");
+	if (value === "~") return homedir();
+	return value.startsWith("~/") ? join(homedir(), value.slice(2)) : value;
 }
 
 function issuedCredential(result: CommandResult): string | undefined {

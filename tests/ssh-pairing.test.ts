@@ -98,31 +98,51 @@ test("machines without a t3 command get the Windows app's CLI as a second try", 
 
 test("this computer's own pairing link comes from the same t3 command run locally, without ssh", async () => {
 	const { calls, run } = runner({ code: 0, stdout: JSON.stringify({ id: "1", credential: "fixture" }) });
-	const local = async () => "env-local\n";
+	const local = async (path: string) => {
+		assert.equal(path, "/data/t3/userdata/environment-id");
+		return "env-local\n";
+	};
 	assert.equal(
-		await issueLocalPairingLink("http://127.0.0.1:3773", "env-local", run, local),
+		await issueLocalPairingLink("http://127.0.0.1:3773", "env-local", run, "/data/t3", local),
 		"http://127.0.0.1:3773/pair#token=fixture",
 	);
 	assert.equal(calls[0]?.command, "sh");
 	assert.equal(calls[0]?.args[0], "-c");
-	assert.match(calls[0]?.args[1] ?? "", /auth pairing create --scope orchestration:read --ttl 5m .*--json$/);
+	// The checked data folder reaches t3 as a positional argument, never inside the command text.
+	assert.match(
+		calls[0]?.args[1] ?? "",
+		/auth pairing create --scope orchestration:read --ttl 5m .*--json --base-dir "\$1"$/,
+	);
+	assert.deepEqual(calls[0]?.args.slice(2), ["sh", "/data/t3"]);
 	await assert.rejects(
-		issueLocalPairingLink("http://127.0.0.1:3773", "env-local", runner({ code: 127, stdout: "" }).run, local),
+		issueLocalPairingLink(
+			"http://127.0.0.1:3773",
+			"env-local",
+			runner({ code: 127, stdout: "" }).run,
+			"/data/t3",
+			local,
+		),
 		rejectsWith("t3-missing"),
 	);
 	await assert.rejects(
-		issueLocalPairingLink("http://127.0.0.1:3773", "env-local", runner({ code: 0, stdout: "{}" }).run, local),
+		issueLocalPairingLink(
+			"http://127.0.0.1:3773",
+			"env-local",
+			runner({ code: 0, stdout: "{}" }).run,
+			"/data/t3",
+			local,
+		),
 		rejectsWith("t3-failed"),
 	);
 	// A loopback address that forwards to another machine's T3 never gets a token minted for this one.
 	const forwarded = runner({ code: 0, stdout: JSON.stringify({ id: "1", credential: "fixture" }) });
 	await assert.rejects(
-		issueLocalPairingLink("http://127.0.0.1:3773", "env-remote", forwarded.run, local),
+		issueLocalPairingLink("http://127.0.0.1:3773", "env-remote", forwarded.run, "/data/t3", local),
 		rejectsWith("identity-mismatch"),
 	);
 	assert.equal(forwarded.calls.length, 0);
 	await assert.rejects(
-		issueLocalPairingLink("http://127.0.0.1:3773", "env-local", forwarded.run, async () => {
+		issueLocalPairingLink("http://127.0.0.1:3773", "env-local", forwarded.run, "/data/t3", async () => {
 			throw new Error("ENOENT");
 		}),
 		rejectsWith("t3-failed"),
