@@ -537,11 +537,14 @@ export class T3LiveClient {
 	}
 }
 
-/** One state for all environments. Unreachable ones are left out of the counts instead of blanking the key. */
+/**
+ * One state for all environments. Unreachable and expired ones are left out of the counts instead of
+ * blanking the key; the settings name them.
+ */
 function overallState(connections: EnvironmentStatus[]): Exclude<ConnectionStatus["state"], "error"> {
 	if (connections.length === 0) return "pairing-required";
-	if (connections.some((env) => env.state === "authorization-required")) return "authorization-required";
 	if (connections.some((env) => env.state === "connected")) return "connected";
+	if (connections.some((env) => env.state === "authorization-required")) return "authorization-required";
 	return connections.some((env) => env.state === "connecting") ? "connecting" : "offline";
 }
 

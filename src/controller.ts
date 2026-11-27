@@ -5,7 +5,7 @@ import {
 	type OpenDeckEvent,
 } from "./opendeck.js";
 import { getAccessibleTitle, isAlerting, renderKey } from "./render.js";
-import { parseSshHosts } from "./ssh-pairing.js";
+import { issueLocalPairingLink, parseSshHosts } from "./ssh-pairing.js";
 import { LiveConnectionError, parsePairingLink } from "./t3-protocol.js";
 import { discoverTailnetHosts, sshPairingIssuer, tailnetAddress, tailnetHttpsOrigin } from "./tailnet.js";
 import {
@@ -43,6 +43,11 @@ export interface T3CodeControllerOptions {
 	animationIntervalMs?: number;
 	/** Creates a read-only pairing link on a host; SSH by default. */
 	issuePairingLink?: (host: string) => Promise<string>;
+	/**
+	 * Creates a read-only pairing link for a T3 server on this computer, at its loopback origin; the
+	 * local `t3` by default, none on Windows.
+	 */
+	issueLocalPairingLink?: (origin: string) => Promise<string>;
 	/** Lists hosts that run T3; Tailscale peers by default. */
 	discoverHosts?: () => Promise<string[]>;
 	/** The address that makes plain HTTP to a host safe without the user's opt-in: its Tailscale address by default. */
@@ -75,6 +80,7 @@ interface ConnectionStatusMessage {
 export class T3CodeController {
 	private readonly animationIntervalMs: number;
 	private readonly issuePairingLink: (host: string) => Promise<string>;
+	private readonly issueLocalPairingLink?: (origin: string) => Promise<string>;
 	private readonly discoverHosts: () => Promise<string[]>;
 	private readonly tailnetAddress: (hostname: string) => Promise<string | undefined>;
 	private readonly tailnetHttpsOrigin: (hostname: string) => Promise<string | undefined>;
@@ -110,6 +116,9 @@ export class T3CodeController {
 		this.animationIntervalMs = options.animationIntervalMs ?? ANIMATION_INTERVAL_MS;
 		this.now = options.now ?? Date.now;
 		this.issuePairingLink = options.issuePairingLink ?? sshPairingIssuer();
+		this.issueLocalPairingLink =
+			options.issueLocalPairingLink ??
+			(process.platform === "win32" ? undefined : (origin) => issueLocalPairingLink(origin));
 		this.discoverHosts = options.discoverHosts ?? (() => discoverTailnetHosts());
 		this.tailnetAddress = options.tailnetAddress ?? ((hostname) => tailnetAddress(hostname));
 		this.tailnetHttpsOrigin = options.tailnetHttpsOrigin ?? ((hostname) => tailnetHttpsOrigin(hostname));
@@ -549,23 +558,57 @@ export class T3CodeController {
 		}
 	}
 
-	/** Creates pairing links on every host at once, then pairs them one by one. */
+	/**
+	 * Creates pairing links on every host at once, then pairs them one by one. Environments paired at a
+	 * loopback address run on this computer, which Tailscale never lists, so they are renewed too.
+	 */
 	private async pairOverSsh(list: string, allowHttp: boolean): Promise<{ host: string; error?: string }[]> {
 		const hosts = parseSshHosts(list);
-		const links = await Promise.allSettled(hosts.map((host) => this.issuePairingLink(host)));
+		const local = await this.localEnvironments();
+		const issueLocal = this.issueLocalPairingLink;
+		const [links, localLinks] = await Promise.all([
+			Promise.allSettled(hosts.map((host) => this.issuePairingLink(host))),
+			Promise.allSettled(local.map((env) => (issueLocal ? issueLocal(env.origin) : Promise.reject()))),
+		]);
 		const results: { host: string; error?: string }[] = [];
-		for (const [index, host] of hosts.entries()) {
-			const link = links[index];
+		const jobs = [
+			...hosts.map((host, index) => ({
+				host,
+				link: links[index],
+				pair: (link: string) => this.pairLink(link, allowHttp),
+			})),
+			// A loopback server needs no Tailscale pinning; plain HTTP to it is always allowed.
+			...local.map((env, index) => ({
+				host: env.label,
+				link: localLinks[index],
+				pair: (link: string) => this.client.pair?.(link, false),
+			})),
+		];
+		for (const { host, link, pair } of jobs) {
 			try {
 				if (link?.status !== "fulfilled") throw link?.reason;
 				if (this.disposed) break;
-				await this.pairLink(link.value, allowHttp);
+				await pair(link.value);
 				results.push({ host });
 			} catch (cause) {
 				results.push({ host, error: clientErrorCode(cause) });
 			}
 		}
 		return results;
+	}
+
+	/** Saved environments whose server runs on this computer, when it can issue its own pairing links. */
+	private async localEnvironments(): Promise<Array<{ label: string; origin: string }>> {
+		if (!this.issueLocalPairingLink) return [];
+		const status = await this.client.getConnectionStatus().catch(() => undefined);
+		if (!status || !("connections" in status)) return [];
+		return status.connections.filter((env) => {
+			try {
+				return ["localhost", "127.0.0.1", "[::1]"].includes(new URL(env.origin).hostname);
+			} catch {
+				return false;
+			}
+		});
 	}
 
 	private queueConnectionStatusReport(context: string): void {

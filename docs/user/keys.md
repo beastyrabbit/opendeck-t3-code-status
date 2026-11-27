@@ -78,11 +78,11 @@ Loading, offline, and connection problems appear on every key type:
 | Key | Meaning | What to do |
 | --- | --- | --- |
 | **PAIR** | No T3 Code server is paired | [Pair a machine](pairing.md) |
-| **RE-PAIR** | The saved authorization expired or was revoked | Create a fresh read-only pairing link and paste it into the same settings panel. Re-pairing keeps your keys and replaces the credential. |
+| **RE-PAIR** | The saved authorization of every paired machine expired or was revoked | Create a fresh read-only pairing link and paste it into the same settings panel. Re-pairing keeps your keys and replaces the credential. |
 | **OFF** | No paired machine can be reached | Check that T3 Code runs and that its network access is on. Press the key to retry. |
 | **VERSION** | The T3 Code server speaks an orchestration protocol this plugin does not support | Update the plugin or T3 Code |
 
-While at least one paired machine is connected, the keys count the connected ones and leave the others out; the settings panel names the machines it is not counting. Transient connection failures retry with backoff up to 30 seconds.
+While at least one paired machine is connected, the keys count the connected ones and leave the others out, including machines whose authorization expired. The settings panel names the machines it is not counting and marks expired ones with **(re-pair)**. Transient connection failures retry with backoff up to 30 seconds.
 
 Status arrives through a live stream, so questions appear or clear as soon as T3 sends an update. There is no polling interval; the refresh-interval setting of earlier versions is no longer used. Pressing a key does not answer or dismiss a question.
 

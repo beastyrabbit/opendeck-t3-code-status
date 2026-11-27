@@ -477,10 +477,13 @@ function normalizeConnectionStatus(status) {
 }
 
 function connectedDetail(status) {
-	// Machines that are offline or still connecting are left out of the counts.
+	// Machines that are offline, still connecting, or need pairing again are left out of the counts.
 	const missing = connections
 		.filter((item) => item.state !== "connected")
-		.map((item) => String(item.label).slice(0, 80));
+		.map(
+			(item) =>
+				String(item.label).slice(0, 80) + (item.state === "authorization-required" ? " (re-pair)" : ""),
+		);
 	if (missing.length > 0) {
 		const live = status.environments - missing.length;
 		return `${live} of ${status.environments} Environments live · not counted: ${missing.join(", ")}`;

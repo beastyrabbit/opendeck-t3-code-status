@@ -616,12 +616,13 @@ test("malformed bounded messages are ignored and a later valid message still ren
 			event: "sendToPropertyInspector",
 			payload: {
 				status: {
-					environments: 3,
+					environments: 4,
 					state: "connected",
 					connections: [
 						environment("anvil", "connected"),
 						environment("kiln", "connected"),
 						environment("devbox", "offline"),
+						environment("bunux", "authorization-required"),
 					],
 				},
 				type: "connectionStatus",
@@ -631,7 +632,7 @@ test("malformed bounded messages are ignored and a later valid message still ren
 	assert.equal(elements.get("connection-state")?.textContent, "Connected");
 	assert.equal(
 		elements.get("connection-detail")?.textContent,
-		"2 of 3 Environments live · not counted: devbox",
+		"2 of 4 Environments live · not counted: devbox, bunux (re-pair)",
 	);
 	assert.deepEqual(connection.closeCalls, []);
 });

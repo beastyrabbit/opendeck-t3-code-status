@@ -67,6 +67,24 @@ export async function issuePairingLink(
 	return link.toString();
 }
 
+/**
+ * Creates a short-lived read-only pairing token with this computer's own `t3` and returns it as a
+ * pairing link for the local T3 server at `origin`. No SSH is involved, because Tailscale does not
+ * list the machine it runs on. POSIX shells only; the token is never logged or shown.
+ */
+export async function issueLocalPairingLink(
+	origin: string,
+	run: CommandRunner = runCommand,
+): Promise<string> {
+	const result = await run("sh", ["-c", REMOTE_COMMAND]);
+	const credential = issuedCredential(result);
+	if (credential === undefined)
+		throw new LiveConnectionError(result.code === 127 ? "t3-missing" : "t3-failed");
+	const link = new URL("/pair", origin);
+	link.hash = new URLSearchParams({ token: credential }).toString();
+	return link.toString();
+}
+
 function issuedCredential(result: CommandResult): string | undefined {
 	if (result.code !== 0) return undefined;
 	try {
