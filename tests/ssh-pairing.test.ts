@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
 
 import {
@@ -100,7 +100,7 @@ test("machines without a t3 command get the Windows app's CLI as a second try", 
 test("this computer's own pairing link comes from the same t3 command run locally, without ssh", async () => {
 	const { calls, run } = runner({ code: 0, stdout: JSON.stringify({ id: "1", credential: "fixture" }) });
 	const local = async (path: string) => {
-		assert.equal(path, "/data/t3/userdata/environment-id");
+		assert.equal(path, join("/data/t3", "userdata", "environment-id"));
 		return "env-local\n";
 	};
 	assert.equal(
@@ -162,8 +162,8 @@ test("the local T3 data folder follows T3CODE_HOME and is always absolute", () =
 	assert.equal(localT3Home("~"), homedir());
 	assert.equal(localT3Home("~/alt"), join(homedir(), "alt"));
 	assert.equal(localT3Home("~\\alt"), join(homedir(), "alt"));
-	assert.equal(localT3Home("/data/t3"), "/data/t3");
-	assert.equal(localT3Home("rel/t3"), join(process.cwd(), "rel/t3"));
+	assert.equal(localT3Home("/data/t3"), resolve("/data/t3"));
+	assert.equal(localT3Home("rel/t3"), resolve("rel/t3"));
 });
 
 test("ssh and t3 failures map to codes the settings panel explains", async () => {
