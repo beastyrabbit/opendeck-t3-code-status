@@ -31,7 +31,8 @@ const LEGACY_REFRESH_SECONDS = 15;
 
 export interface T3StatusClient {
 	subscribe?(listener: () => void): () => void;
-	pair?(link: string, allowHttp: boolean, host?: string): Promise<void>;
+	/** `environmentId`, when given, is the environment being renewed; any other one is refused before the token is sent. */
+	pair?(link: string, allowHttp: boolean, host?: string, environmentId?: string): Promise<void>;
 	remove?(environmentId: string): Promise<void>;
 	reconnect?(): Promise<void>;
 	dispose?(): Promise<void>;
@@ -563,12 +564,12 @@ export class T3CodeController {
 	 * loopback address run on this computer, which Tailscale never lists, so they are renewed too.
 	 */
 	private async pairOverSsh(list: string, allowHttp: boolean): Promise<{ host: string; error?: string }[]> {
-		const hosts = parseSshHosts(list);
 		const local = await this.localEnvironments();
-		const issueLocal = this.issueLocalPairingLink;
+		// With no hosts, Pair all still renews the environments on this computer.
+		const hosts = list.trim() === "" && local.length > 0 ? [] : parseSshHosts(list);
 		const [links, localLinks] = await Promise.all([
 			Promise.allSettled(hosts.map((host) => this.issuePairingLink(host))),
-			Promise.allSettled(local.map((env) => (issueLocal ? issueLocal(env.origin) : Promise.reject()))),
+			Promise.allSettled(local.map((env) => env.issue(env.origin))),
 		]);
 		const results: { host: string; error?: string }[] = [];
 		const jobs = [
@@ -581,7 +582,7 @@ export class T3CodeController {
 			...local.map((env, index) => ({
 				host: env.label,
 				link: localLinks[index],
-				pair: (link: string) => this.client.pair?.(link, false),
+				pair: (link: string) => this.client.pair?.(link, false, undefined, env.environmentId),
 			})),
 		];
 		for (const { host, link, pair } of jobs) {
@@ -598,17 +599,27 @@ export class T3CodeController {
 	}
 
 	/** Saved environments whose server runs on this computer, when it can issue its own pairing links. */
-	private async localEnvironments(): Promise<Array<{ label: string; origin: string }>> {
-		if (!this.issueLocalPairingLink) return [];
+	private async localEnvironments(): Promise<
+		Array<{
+			environmentId: string;
+			label: string;
+			origin: string;
+			issue: (origin: string) => Promise<string>;
+		}>
+	> {
+		const issue = this.issueLocalPairingLink;
+		if (!issue) return [];
 		const status = await this.client.getConnectionStatus().catch(() => undefined);
 		if (!status || !("connections" in status)) return [];
-		return status.connections.filter((env) => {
-			try {
-				return ["localhost", "127.0.0.1", "[::1]"].includes(new URL(env.origin).hostname);
-			} catch {
-				return false;
-			}
-		});
+		return status.connections
+			.filter((env) => {
+				try {
+					return ["localhost", "127.0.0.1", "[::1]"].includes(new URL(env.origin).hostname);
+				} catch {
+					return false;
+				}
+			})
+			.map((env) => ({ ...env, issue }));
 	}
 
 	private queueConnectionStatusReport(context: string): void {

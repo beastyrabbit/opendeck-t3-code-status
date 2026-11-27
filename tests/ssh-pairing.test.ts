@@ -47,7 +47,7 @@ test("the pairing link comes from a fixed read-only t3 command and points at the
 	assert.match(remote, /\$HOME\/\.t3\/runtime\/service-state\.json/);
 	assert.match(
 		remote,
-		/PATH="\$PATH:\$HOME\/\.local\/bin:\$HOME\/\.t3\/bin" "\$t3" auth pairing create --scope orchestration:read --ttl 5m .*--json$/,
+		/PATH="\$PATH:\$HOME\/\.local\/bin:\$HOME\/\.t3\/bin" exec "\$t3" auth pairing create --scope orchestration:read --ttl 5m .*--json$/,
 	);
 	assert.ok(args.includes("BatchMode=yes"));
 	assert.equal(

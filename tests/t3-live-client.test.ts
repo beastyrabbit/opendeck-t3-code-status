@@ -400,6 +400,18 @@ test("identity mismatch never sends bearer credentials and revoked sessions requ
 	await until(client, async () => (await client.getConnectionStatus()).state === "authorization-required");
 });
 
+test("renewing an environment refuses a different one at its address before sending the token", async (context) => {
+	const server = await fixture(context);
+	const client = new T3LiveClient({ store: new MemoryStore(), retryMs: 10 });
+	context.after(() => client.dispose());
+	await assert.rejects(client.pair(server.link, false, undefined, "env-other"), {
+		code: "identity-mismatch",
+	});
+	assert.ok(server.requests.every((item) => item.path !== "/oauth/token"));
+	await client.pair(server.link, false, undefined, "env-1");
+	await connected(client);
+});
+
 test("restore credentials across plugin restarts and reject excessive scopes without replacing existing connection", async (context) => {
 	const server = await fixture(context);
 	const store = new MemoryStore();

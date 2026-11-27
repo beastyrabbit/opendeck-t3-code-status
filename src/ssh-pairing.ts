@@ -18,7 +18,7 @@ const REMOTE_COMMAND = [
 	String.raw`v=$(sed -n 's/.*"activeVersion": *"\([^"]*\)".*/\1/p' "$HOME/.t3/runtime/service-state.json" 2>/dev/null)`,
 	't3="$HOME/.t3/runtime/versions/$v/t3"',
 	'{ [ -n "$v" ] && [ -x "$t3" ]; } || t3=t3',
-	'PATH="$PATH:$HOME/.local/bin:$HOME/.t3/bin" "$t3" auth pairing create --scope orchestration:read --ttl 5m --label opendeck-t3-code-status --json',
+	'PATH="$PATH:$HOME/.local/bin:$HOME/.t3/bin" exec "$t3" auth pairing create --scope orchestration:read --ttl 5m --label opendeck-t3-code-status --json',
 ].join("; ");
 // Windows T3 Code ships no t3 command; its app runs the same CLI in Node mode. Runs in cmd, the
 // default shell of Windows OpenSSH, and is tried only when the command above fails.

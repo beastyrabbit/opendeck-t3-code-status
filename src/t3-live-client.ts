@@ -104,7 +104,7 @@ export class T3LiveClient {
 		this.environments.set(saved.environmentId, env);
 		void this.connect(env);
 	}
-	async pair(link: string, allowHttp = false, host?: string): Promise<void> {
+	async pair(link: string, allowHttp = false, host?: string, environmentId?: string): Promise<void> {
 		await this.ready;
 		if (this.busy) throw new LiveConnectionError("busy");
 		if (this.disposed) return;
@@ -115,6 +115,8 @@ export class T3LiveClient {
 			const descriptor = await this.request(target.origin, "/.well-known/t3/environment");
 			if (!record(descriptor) || !textValue(descriptor.environmentId))
 				throw new LiveConnectionError("invalid-response");
+			if (environmentId !== undefined && descriptor.environmentId !== environmentId)
+				throw new LiveConnectionError("identity-mismatch");
 			assertSupportedProtocol(descriptor);
 			if (!this.environments.has(descriptor.environmentId) && this.environments.size >= MAX_ENVIRONMENTS)
 				throw new LiveConnectionError("invalid-response");

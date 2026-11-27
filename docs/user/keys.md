@@ -78,7 +78,7 @@ Loading, offline, and connection problems appear on every key type:
 | Key | Meaning | What to do |
 | --- | --- | --- |
 | **PAIR** | No T3 Code server is paired | [Pair a machine](pairing.md) |
-| **RE-PAIR** | The saved authorization of every paired machine expired or was revoked | Create a fresh read-only pairing link and paste it into the same settings panel. Re-pairing keeps your keys and replaces the credential. |
+| **RE-PAIR** | No paired machine is connected, and at least one saved authorization expired or was revoked | Create a fresh read-only pairing link and paste it into the same settings panel. Re-pairing keeps your keys and replaces the credential. |
 | **OFF** | No paired machine can be reached | Check that T3 Code runs and that its network access is on. Press the key to retry. |
 | **VERSION** | The T3 Code server speaks an orchestration protocol this plugin does not support | Update the plugin or T3 Code |
 

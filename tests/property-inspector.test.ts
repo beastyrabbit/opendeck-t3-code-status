@@ -367,6 +367,15 @@ test("SSH pairing lists the paired remote machines, sends the hosts, and reports
 	});
 	assert.equal(button.disabled, false);
 	assert.equal(elements.get("ssh-result")?.textContent, "Paired anvil.\nkiln: SSH login failed");
+
+	// An empty list sends nothing, unless a machine paired on this computer can be renewed.
+	hosts.value = "";
+	const sent = connection.sent.length;
+	button.emit("click");
+	assert.equal(connection.sent.length, sent);
+	status(["http://127.0.0.1:3773"]);
+	button.emit("click");
+	assert.equal(JSON.parse(connection.sent.at(-1) ?? "").payload.hosts, "");
 });
 
 test("Find adds the T3 machines found on the tailnet to the SSH host list", () => {
