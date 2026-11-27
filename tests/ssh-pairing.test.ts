@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
@@ -8,6 +8,7 @@ import {
 	type CommandResult,
 	issueLocalPairingLink,
 	issuePairingLink,
+	localT3Home,
 	parseSshHosts,
 	readSshConfigAliases,
 } from "../src/ssh-pairing.js";
@@ -148,6 +149,15 @@ test("this computer's own pairing link comes from the same t3 command run locall
 		rejectsWith("t3-failed"),
 	);
 	assert.equal(forwarded.calls.length, 0);
+});
+
+test("the local T3 data folder follows T3CODE_HOME and is always absolute", () => {
+	assert.equal(localT3Home(undefined), join(homedir(), ".t3"));
+	assert.equal(localT3Home("~"), homedir());
+	assert.equal(localT3Home("~/alt"), join(homedir(), "alt"));
+	assert.equal(localT3Home("~\\alt"), join(homedir(), "alt"));
+	assert.equal(localT3Home("/data/t3"), "/data/t3");
+	assert.equal(localT3Home("rel/t3"), join(process.cwd(), "rel/t3"));
 });
 
 test("ssh and t3 failures map to codes the settings panel explains", async () => {

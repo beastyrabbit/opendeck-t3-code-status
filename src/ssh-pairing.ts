@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { LiveConnectionError, record, textValue } from "./t3-protocol.js";
 
 const T3_PORT = 3773;
@@ -94,12 +94,14 @@ export async function issueLocalPairingLink(
 	return link.toString();
 }
 
-/** This computer's T3 data folder, resolved the way T3 resolves `T3CODE_HOME`. */
-function localT3Home(): string {
-	const value = process.env.T3CODE_HOME?.trim();
+/**
+ * This computer's T3 data folder, resolved the way T3 resolves `T3CODE_HOME`. It is absolute, so t3
+ * cannot expand the `--base-dir` it receives into a different folder than the one checked.
+ */
+export function localT3Home(value = process.env.T3CODE_HOME?.trim()): string {
 	if (!value) return join(homedir(), ".t3");
 	if (value === "~") return homedir();
-	return value.startsWith("~/") ? join(homedir(), value.slice(2)) : value;
+	return resolve(/^~[/\\]/.test(value) ? join(homedir(), value.slice(2)) : value);
 }
 
 function issuedCredential(result: CommandResult): string | undefined {
